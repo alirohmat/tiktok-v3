@@ -1,0 +1,8 @@
+{
+  "name": "TikTok v2 AI Clipper",
+  "description": "Digital DNA Rebirth & Retention Engine with yt-dlp downloader, Groq Whisper transcription, SEO hashtag generator, Seamless Loop, Theme Backsound, Filler Cleaner, and 9:16 vertical video clipper.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
