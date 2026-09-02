@@ -1,12 +1,16 @@
 FROM node:20-slim
 
-# Install ffmpeg, curl, ca-certificates, and python3 for yt-dlp
+# Install ffmpeg, curl, ca-certificates, python3, unzip for yt-dlp + deno
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
     python3 \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install deno (JS runtime untuk yt-dlp YouTube extraction)
+RUN curl -fsSL https://deno.land/install.sh | sh && mv /root/.deno/bin/deno /usr/local/bin/deno && deno --version
 
 # Install standalone yt-dlp binary
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \

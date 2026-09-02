@@ -471,6 +471,8 @@ app.post('/api/ytdlp/download', (req: Request, res: Response) => {
     '-o', targetPath,
     '--no-playlist',
     '--force-overwrites',
+    '--merge-output-format', 'mp4',
+    '--js-runtimes', 'deno',
     url
   ];
 
@@ -500,20 +502,10 @@ app.post('/api/ytdlp/download', (req: Request, res: Response) => {
       job.finished_at = Date.now();
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Download biner sukses: ${cleanFilename} (${(stat.size/1024/1024).toFixed(1)} MB)`);
     } else {
-      // If direct URL blocked (e.g. anti-bot/IP limitation in cloud sandbox), generate physical demo MP4 binary
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Network direct stream fallback: membuat file biner video MP4 valid...`);
-      try {
-        await execAsync(`ffmpeg -y -f lavfi -i "testsrc=size=1080x1920:rate=30" -f lavfi -i "sine=frequency=440:duration=45" -c:v libx264 -t 45 -pix_fmt yuv420p -c:a aac "${targetPath}"`);
-        const stat = fs.statSync(targetPath);
-        job.filesize = stat.size;
-        job.progress = 1.0;
-        job.status = 'completed';
-        job.finished_at = Date.now();
-        job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] File biner video siap di-clip: ${cleanFilename}`);
-      } catch (err: any) {
-        job.status = 'error';
-        job.error = err?.message || 'Gagal download video';
-      }
+      // Honest error: yt-dlp gagal, jangan buat video palsu testsrc/sine
+      job.status = 'error';
+      job.error = `Download gagal (yt-dlp exit ${'${'}code ?? 'unknown'}, file tidak tersedia). Coba URL lain atau periksa batasan YouTube di VPS.`;
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] ERROR: Download gagal (code=${'${'}code}), file sumber tidak dibuat — laporan jujur, tidak ada fallback palsu`);
     }
     sources = scanDownloads();
     broadcastSSE();
@@ -824,16 +816,15 @@ function startClipPipeline(sourcePathOrName: string, opts: ClipOptions = {}): st
   clipJobs.set(jobId, job);
   broadcastSSE();
 
-  // If input file does not exist, synthesize a test source MP4 video
+  // Honest: jika file sumber tidak ada -> error, jangan buat video palsu testsrc
   (async () => {
     if (!fs.existsSync(inputPath)) {
-      inputPath = path.join(downloadsDir, path.basename(sourcePathOrName));
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Membuat video sumber fisik MP4...`);
-      try {
-        await execAsync(`ffmpeg -y -f lavfi -i "testsrc=size=1920x1080:rate=30" -f lavfi -i "sine=frequency=440:duration=60" -c:v libx264 -t 60 -pix_fmt yuv420p -c:a aac "${inputPath}"`);
-      } catch (e) {
-        console.error('Failed to create test source:', e);
-      }
+      job.status = 'error';
+      job.phase = 'error';
+      job.error = `File sumber tidak ditemukan: ${path.basename(sourcePathOrName)}. Upload/link download gagal, tidak ada video asli untuk di-clip.`;
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] ERROR: File sumber tidak ditemukan — pipeline dibatalkan, tunggu download sukses`);
+      broadcastSSE();
+      return;
     }
     await executeRealFFmpegPipeline(jobId, inputPath, path.basename(inputPath), opts);
   })();
