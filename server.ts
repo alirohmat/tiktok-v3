@@ -348,7 +348,7 @@ app.get(['/clip/diagnostics', '/api/diagnostics', '/diagnostics'], (_req: Reques
     },
     disk: {
       root: { used_pct: disk.percent_used },
-      storage: { free_gb: '95' }
+      storage: { free_gb: disk.free_space }
     },
     quota_error: null,
     watermark: '@brogalanblora'
