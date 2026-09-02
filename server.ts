@@ -617,8 +617,11 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       ? `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
       : `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
 
+    let clip2Ok = false;
     try {
       await execAsync(cmdClip2);
+      clip2Ok = fs.existsSync(outClip2Path) && fs.statSync(outClip2Path).size > 10000;
+      if (!clip2Ok) throw new Error('clip2 empty');
     } catch (e2) {
       let fbStart = 5, fbDur = 25;
       try {
