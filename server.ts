@@ -579,20 +579,30 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     // Filter combines:
     // 1. Video: 9:16 crop, 1080x1920 scale, drawtext watermark @brogalanblora
     // 2. Audio: Voice + Backsound mixing (amix/ducking) + 19kHz Ultrasonic tone anti-duplicate
+    const hasBg = themeKey !== 'none' && fs.existsSync(bgAudioPath);
+    // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
     const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920,drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=38:x=(w-text_w)/2:y=h-180[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=38:x=(w-text_w)/2:y=h-180[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
-      themeKey !== 'none' && fs.existsSync(bgAudioPath)
+      hasBg
         ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix]`
         : `[vocal]acopy[a_mix]`,
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
+    const filterComplexNoBg = [
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=38:x=(w-text_w)/2:y=h-180[v_out]`,
+      cleanFillersEnabled
+        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        : `[0:a]volume=1.2[vocal]`,
+      `[vocal]acopy[a_mix]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+    ].join(';');
 
-    const cmdClip1 = themeKey !== 'none' && fs.existsSync(bgAudioPath)
+    const cmdClip1 = hasBg
       ? `ffmpeg -y -ss 0 -t 30 -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`
-      : `ffmpeg -y -ss 0 -t 30 -i "${inputPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`;
+      : `ffmpeg -y -ss 0 -t 30 -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`;
 
     await execAsync(cmdClip1);
 
@@ -603,15 +613,21 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 4/5: Memproses Clip 2 (Segmen 30s-60s + Visual Hash Rebirth)`);
     broadcastSSE();
 
-    const cmdClip2 = themeKey !== 'none' && fs.existsSync(bgAudioPath)
+    const cmdClip2 = hasBg
       ? `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
-      : `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
+      : `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
 
     try {
       await execAsync(cmdClip2);
-    } catch {
-      // If input < 60s, take 5s-30s slice
-      const fallbackCmd = `ffmpeg -y -ss 5 -t 25 -i "${inputPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
+    } catch (e2) {
+      let fbStart = 5, fbDur = 25;
+      try {
+        const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
+        const dur = parseFloat(stdout.trim()) || 15;
+        fbStart = dur > 15 ? 5 : 0;
+        fbDur = Math.max(5, Math.min(25, dur - fbStart));
+      } catch {}
+      const fallbackCmd = `ffmpeg -y -ss ${fbStart} -t ${fbDur} -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
       await execAsync(fallbackCmd);
     }
 
