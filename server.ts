@@ -248,25 +248,53 @@ const renders = new Map<string, RenderItem>();
 const jobMetas = new Map<string, JobMeta>();
 
 // Helper functions
+function getDirStats(dir: string) {
+  let files = 0, bytes = 0;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      try {
+        if (e.isDirectory()) { const sub = getDirStats(p); files += sub.files; bytes += sub.bytes; }
+        else if (e.isFile()) { files++; bytes += fs.statSync(p).size; }
+      } catch {}
+    }
+  } catch {}
+  return { files, bytes };
+}
+function humanSize(b: number) { return b >= 1073741824 ? (b/1073741824).toFixed(2)+' GB' : (b/1048576).toFixed(1)+' MB'; }
+
 function getStorageStats() {
   sources = scanDownloads();
-  const downloadCount = sources.length;
-  const renderCount = renders.size;
+  const dl = getDirStats(downloadsDir);
+  const rd = getDirStats(rendersDir);
+  const au = getDirStats(audioAssetsDir);
+  const totalBytes = dl.bytes + rd.bytes + au.bytes;
   return {
-    total_files: downloadCount + renderCount,
-    downloads_count: downloadCount,
-    renders_count: renderCount,
-    total_size_mb: ((downloadCount * 22) + (renderCount * 15)).toFixed(1)
+    total_files: dl.files + rd.files,
+    downloads_count: dl.files,
+    renders_count: rd.files,
+    total_size_mb: (totalBytes/1048576).toFixed(1),
+    total_size_human: humanSize(totalBytes)
   };
 }
 
 function getDiskInfo() {
-  return {
-    total_space: '100 GB',
-    used_space: `${((sources.length * 25 + renders.size * 18) / 1024).toFixed(2)} GB`,
-    free_space: '95 GB',
-    percent_used: Math.min(95, Math.round((sources.length * 25 + renders.size * 18) / 1024 * 100) / 100 + 3)
-  };
+  try {
+    // ponytail: Node 19+ statfsSync — falls back to 100GB mock if unavailable
+    const st: any = (fs as any).statfsSync(storageDir);
+    const total = st.bsize * st.blocks;
+    const free = st.bsize * st.bfree;
+    const used = total - free;
+    return {
+      total_space: humanSize(total),
+      used_space: humanSize(used),
+      free_space: humanSize(free),
+      percent_used: total ? Math.round((used/total)*100) : 0
+    };
+  } catch {
+    return { total_space: '20 GB', used_space: '0 GB', free_space: '20 GB', percent_used: 0 };
+  }
 }
 
 // SSE Clients Registry
@@ -308,12 +336,15 @@ app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
 
 // Diagnostics endpoint for store/UI
 app.get(['/clip/diagnostics', '/api/diagnostics', '/diagnostics'], (_req: Request, res: Response) => {
+  const dl = getDirStats(downloadsDir);
+  const rd = getDirStats(rendersDir);
+  const au = getDirStats(audioAssetsDir);
   const disk = getDiskInfo();
   res.json({
     storage_stats: {
-      downloads: { files: sources.length, human: `${((sources.length * 25) / 1024).toFixed(1)} GB` },
-      renders: { files: renders.size, human: `${((renders.size * 18) / 1024).toFixed(1)} GB` },
-      audio_assets: { files: 4, human: '20.4 MB' }
+      downloads: { files: dl.files, human: humanSize(dl.bytes) },
+      renders: { files: rd.files, human: humanSize(rd.bytes) },
+      audio_assets: { files: au.files, human: humanSize(au.bytes) }
     },
     disk: {
       root: { used_pct: disk.percent_used },
