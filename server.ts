@@ -155,7 +155,7 @@ interface DetailedCaption {
 
 interface SeamlessLoopMeta {
   enabled: boolean;
-  loop_score: number;
+  loop_score: number | null;
   bridge_phrase: string;
   loop_transition: string;
   crossfade_ms: number;
@@ -177,7 +177,7 @@ interface NarrativeCleanMeta {
   silence_cut_sec: number;
   original_duration_sec: number;
   optimized_duration_sec: number;
-  pacing_wpm: number;
+  pacing_wpm: number | null;
   speedup_pct: number;
 }
 
@@ -196,7 +196,7 @@ interface JobMeta {
   engagement?: {
     niche_tag: string;
     niche_profit_tier: string;
-    niche_score: number;
+    niche_score: number | null;
     niche_advisory: string;
     comments: string[];
   };
@@ -410,8 +410,8 @@ app.post('/api/ytdlp/info', async (req: Request, res: Response) => {
         extractor: info.extractor || 'media',
         description: (info.description || '').slice(0, 300),
         formats: [
-          { format_id: 'best', ext: 'mp4', resolution: '1080x1920', filesize: 25000000 },
-          { format_id: 'audio_only', ext: 'mp3', resolution: 'audio', filesize: 3500000 }
+          { format_id: 'best', ext: 'mp4', resolution: '1080x1920', filesize: null },
+          { format_id: 'audio_only', ext: 'mp3', resolution: 'audio', filesize: null }
         ]
       }
     });
@@ -424,13 +424,13 @@ app.post('/api/ytdlp/info', async (req: Request, res: Response) => {
         title: isTiktok ? 'TikTok Viral Video Stream' : 'Video Sumber Online',
         uploader: '@creator',
         duration: 90,
-        view_count: 154000,
-        like_count: 8900,
+        view_count: null,
+        like_count: null, // ponytail: real counts require yt-dlp success; null = unavailable
         extractor: isTiktok ? 'tiktok' : 'youtube',
         description: 'Video terdeteksi siap diproses untuk pipeline kliping.',
         formats: [
-          { format_id: 'best', ext: 'mp4', resolution: '1080x1920', filesize: 24000000 },
-          { format_id: 'audio_only', ext: 'mp3', resolution: 'audio', filesize: 3200000 }
+          { format_id: 'best', ext: 'mp4', resolution: '1080x1920', filesize: null },
+          { format_id: 'audio_only', ext: 'mp3', resolution: 'audio', filesize: null }
         ]
       }
     });
@@ -613,7 +613,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const hasBg = themeKey !== 'none' && fs.existsSync(bgAudioPath);
     // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
     const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='RAHASIA FYP 2026 TERBONGKAR':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='trik fyp tiktok':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='Save \\& Share ->':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='AUTO HOOK':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='edit before upload':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='Save \\& Share ->':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -623,7 +623,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='RAHASIA FYP 2026 TERBONGKAR':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='trik fyp tiktok':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='Save \\& Share ->':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='AUTO HOOK':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='edit before upload':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='Save \\& Share ->':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -673,8 +673,9 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     job.finished_at = Date.now() / 1000;
     job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] SUCCESS — 2 file biner video MP4 1080x1920 HD berhasil dirender ke disk!`);
 
-    const stat1 = fs.existsSync(outClip1Path) ? fs.statSync(outClip1Path) : { size: 14500000 };
-    const stat2 = fs.existsSync(outClip2Path) ? fs.statSync(outClip2Path) : { size: 16200000 };
+    const stat1 = fs.existsSync(outClip1Path) ? fs.statSync(outClip1Path) : { size: 0 };
+    const stat2 = fs.existsSync(outClip2Path) ? fs.statSync(outClip2Path) : { size: 0 };
+    if (stat1.size === 0 || stat2.size === 0) throw new Error('Render output missing — check FFmpeg logs');
 
     renders.set(`${jobId}-1`, {
       job_id: jobId,
@@ -694,39 +695,39 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
 
     jobMetas.set(jobId, {
       captions: {
-        [clip1Filename]: `Trik rahasia FYP 2026 yang 99% kreator belum tahu! Tonton sampai habis 🔥 #fyp #affiliatetiktok #tiktoktips #contentcreator #digitaldna`,
-        [clip2Filename]: `Strategi monetisasi anti-duplicate video dengan visual hash break! 💡 #marketing #edukasi #cuan #videoviral #digitaldna`
+        [clip1Filename]: `Auto clip: ${baseCleanName} — edit caption sebelum upload #fyp #tiktoktips`,
+        [clip2Filename]: `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual #edukasi #cuan`
       },
       detailed_captions: {
         [clip1Filename]: {
-          full_caption: `Trik rahasia FYP 2026 yang 99% kreator belum tahu! Tonton sampai habis 🔥 #fyp #affiliatetiktok #tiktoktips #contentcreator #digitaldna`,
-          hook_text: 'Trik rahasia FYP 2026 yang 99% kreator belum tahu!',
-          body_text: 'Terapkan strategi hook 3 detik ini sekarang untuk memicu retensi di atas 70% dan maksimalkan konversi keranjang kuning.',
-          hashtags: ['#fyp', '#affiliatetiktok', '#tiktoktips', '#contentcreator', '#digitaldna'],
-          hashtags_str: '#fyp #affiliatetiktok #tiktoktips #contentcreator #digitaldna'
+          full_caption: `Auto clip: ${baseCleanName} — edit caption sebelum upload`,
+          hook_text: `Auto hook: ${baseCleanName}`,
+          body_text: 'Caption auto — ganti dengan hook 3 detik sesuai riset (y=80, 5-12 kata).',
+          hashtags: ['#fyp', '#tiktoktips'],
+          hashtags_str: '#fyp #tiktoktips'
         },
         [clip2Filename]: {
-          full_caption: `Strategi monetisasi anti-duplicate video dengan visual hash break! 💡 #marketing #edukasi #cuan #videoviral #digitaldna`,
-          hook_text: 'Strategi monetisasi anti-duplicate video dengan visual hash break!',
-          body_text: 'Solusi aman anti-shadowban untuk akun clipper & affiliate dengan injeksi audio ultrasonik 19kHz.',
-          hashtags: ['#marketing', '#edukasi', '#cuan', '#videoviral', '#digitaldna'],
-          hashtags_str: '#marketing #edukasi #cuan #videoviral #digitaldna'
+          full_caption: `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual`,
+          hook_text: `Auto hook 2: ${baseCleanName}`,
+          body_text: 'Caption auto — isi keyword SEO 50 char pertama sebelum posting.',
+          hashtags: ['#edukasi', '#cuan'],
+          hashtags_str: '#edukasi #cuan'
         }
       },
       seamless_loop: {
         [clip1Filename]: {
           enabled: seamlessEnabled,
-          loop_score: 98,
-          bridge_phrase: '...dan alasan kenapa semua ini bisa terjadi adalah karena',
-          loop_transition: 'Audio Crossfade 120ms + Kalimat Bridge Gramatikal ke Detik 0',
-          crossfade_ms: 120
+          loop_score: null, // ponytail: requires transcript alignment; null until Groq Whisper real
+          bridge_phrase: '',
+          loop_transition: 'pending transcript',
+          crossfade_ms: 0
         },
         [clip2Filename]: {
           enabled: seamlessEnabled,
-          loop_score: 95,
-          bridge_phrase: '...maka dari itu kamu harus selalu ingat bahwa',
-          loop_transition: 'Visual Cut Match + Audio Equal-Power Crossfade 150ms',
-          crossfade_ms: 150
+          loop_score: null,
+          bridge_phrase: '',
+          loop_transition: 'pending transcript',
+          crossfade_ms: 0
         }
       },
       backsound: {
@@ -735,51 +736,47 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
           track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`,
           bpm: selectedTheme.bpm,
           ducking_db: selectedTheme.ducking,
-          license: 'TikTok Commercial Audio Safe (100% Bebas Copyright)',
-          audio_hash_cleaned: true
+          license: 'Generated locally (check TikTok Commercial Music Library before monetize)',
+          audio_hash_cleaned: false
         },
         [clip2Filename]: {
           theme: selectedTheme.category,
           track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`,
           bpm: selectedTheme.bpm,
           ducking_db: selectedTheme.ducking,
-          license: 'TikTok Commercial Audio Safe (100% Bebas Copyright)',
-          audio_hash_cleaned: true
+          license: 'Generated locally (check TikTok Commercial Music Library before monetize)',
+          audio_hash_cleaned: false
         }
       },
       narrative_cleaning: {
         [clip1Filename]: {
           enabled: cleanFillersEnabled,
-          filler_words_removed: 14,
-          fillers_detected: ['ehm (6x)', 'aa (4x)', 'anu (2x)', 'jeda hening >0.45s (2x)'],
-          silence_cut_sec: 3.6,
-          original_duration_sec: 33.6,
+          filler_words_removed: 0, // ponytail: real count requires Groq Whisper transcript
+          fillers_detected: [],
+          silence_cut_sec: 0,
+          original_duration_sec: 0,
           optimized_duration_sec: 30.0,
-          pacing_wpm: 162,
-          speedup_pct: 22
+          pacing_wpm: null,
+          speedup_pct: 0
         },
         [clip2Filename]: {
           enabled: cleanFillersEnabled,
-          filler_words_removed: 12,
-          fillers_detected: ['ehm (5x)', 'ngg (3x)', 'jeda hening >0.45s (4x)'],
-          silence_cut_sec: 3.2,
-          original_duration_sec: 33.2,
+          filler_words_removed: 0,
+          fillers_detected: [],
+          silence_cut_sec: 0,
+          original_duration_sec: 0,
           optimized_duration_sec: 30.0,
-          pacing_wpm: 158,
-          speedup_pct: 19
+          pacing_wpm: null,
+          speedup_pct: 0
         }
       },
       posting_schedule: DEFAULT_POSTING_SCHEDULE,
       engagement: {
         niche_tag: selectedTheme.category,
-        niche_profit_tier: 'Tier A (Komisi 15-20%)',
-        niche_score: 94,
-        niche_advisory: 'Tinggi interaksi untuk audiens muda & kreator pemula. Call-to-Action save & share terbukti meningkatkan virality.',
-        comments: [
-          'Gila, baru diposting 30 menit langsung tembus 5k views!',
-          'Audio backsound-nya pas banget, gak tabrakan sama suara vokal.',
-          'Seamless loop-nya beneran gak kerasa kalau videonya udah muter 2 kali.'
-        ]
+        niche_profit_tier: 'unknown (need LLM niche classification)',
+        niche_score: null,
+        niche_advisory: 'Auto — isi niche manual sesuai riset Strategi Afiliasi.',
+        comments: []
       }
     });
 
