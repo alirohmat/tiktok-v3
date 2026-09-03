@@ -64,6 +64,10 @@ function normalizePinnedReply(raw:any, entities:any):string{
   return `Buat yang mau dengar cerita lengkapnya, cek playlist di profil / part 2 besok ya!`;
 }
 let lastWhisperSegments:any[]|null=null;
+let transcriptPartialFlag=false;
+let groqTranscribeLock:Promise<void>=Promise.resolve();
+async function acquireGroqLock():Promise<()=>void>{ let release:()=>void; const wait=new Promise<void>(r=>{release=r as any}); const prev=groqTranscribeLock; groqTranscribeLock=prev.then(()=>wait); await prev; return release!; }
+const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r as any,ms));
 const FILLER_RE=/\b(?:eee+|hmm+|eh+|um+|uh+|anu|emm+|er+|anu)\b|apa namanya|ya kan/gi;
 function computeNarrativeMetrics(transcript:string|null, segments:any[]|null, durSec:number){
   const txt=(transcript||'').trim();
@@ -191,21 +195,45 @@ async function buildContextPackage(sourceName:string, transcript:string|null):Pr
   return { source_meta, entities, external_context };
 }
 function buildPostingSchedule(tier:'low'|'medium'|'high'){ const isHigh=tier==='high', isMed=tier==='medium'; const slots=[ {slot:'Pagi Hari (06:30 - 08:30 WIB)',time_range:'06:30 - 08:30 WIB',category:'Morning Commute & Breakfast (WIB)',traffic:isHigh?'Sangat Tinggi' as const:'Tinggi' as const,description:isHigh?'Golden pagi niche high — prioritas upload pagi':'Cocok untuk edukasi ringkas pagi',is_golden:isHigh}, {slot:'Siang Hari (11:45 - 13:15 WIB)',time_range:'11:45 - 13:15 WIB',category:'Lunch Break & Relax',traffic:'Tinggi' as const,description:'Traffic siang stabil',is_golden:false}, {slot:'Sore Hari (16:30 - 18:00 WIB)',time_range:'16:30 - 18:00 WIB',category:'Teatime & Heading Home',traffic:'Sedang' as const,description:'Pemanasan algoritma sore',is_golden:false}, {slot:'Malam Hari (19:00 - 21:00 WIB)',time_range:'19:00 - 21:00 WIB',category:'Golden Prime Time WIB',traffic:'Sangat Tinggi' as const,description:isHigh?'Prime malam — slot kedua high tier':'Prime malam — slot utama low/medium',is_golden:true} ]; const best=isHigh?'06:30 - 08:30 WIB (Pagi Golden - niche high)': isMed?'19:00 - 21:00 WIB (Prime Time - niche medium)':'19:00 - 21:00 WIB (Prime Time - niche low, slot lebih akhir)'; const advice=isHigh?'Upload 06:30 WIB (utama) + 19:00 WIB (kedua) — high tier prioritas pagi':'Upload 19:00 WIB — niche '+tier; return {timezone:'Asia/Jakarta (WIB)',slots,best_slot_today:best,advice}; }
-async function transcribeWithGroq(inputPath:string):Promise<string|null>{
-  const k=(process.env.GROQ_API_KEY||'').trim(); if(!k||k.includes('your_')) return null;
+async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<string|null>{
+  const release=await acquireGroqLock();
+  transcriptPartialFlag=false;
+  if(probeDur>7200) console.warn(`[GroqWhisper] Video exceeds Groq free tier hourly limit (${probeDur.toFixed(0)}s > 7200s). Using smart 120s first-chunk sampling to stay within quota.`);
   const tmpWav=`/tmp/groq_${Date.now()}.wav`;
   try{
+    // full 120s first chunk is intentional sampling - keeps every job under 120s quota
     await execAsync(`ffmpeg -y -i "${inputPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -t 120 "${tmpWav}"`);
     if(!fs.existsSync(tmpWav)||fs.statSync(tmpWav).size<1000) return null;
     const buf=fs.readFileSync(tmpWav); const fd=new FormData();
     fd.append('file', new Blob([buf],{type:'audio/wav'}), 'audio.wav');
     fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3-turbo');
     fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
-    const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k},body:fd as any});
-    try{fs.unlinkSync(tmpWav);}catch{}
-    if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); lastWhisperSegments=null; return null;}
-    const j:any=await r.json(); if(Array.isArray((j as any).segments)) lastWhisperSegments=(j as any).segments; else lastWhisperSegments=null; return ((j as any).text||'').trim().slice(0,4000)||null;
+    for(let attempt=0; attempt<3; attempt++){
+      try{
+        const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k},body:fd as any});
+        if(r.status===429){
+          const body=(await r.text()).slice(0,300);
+          console.warn(`[GroqWhisper] 429 rate limit hit attempt ${attempt+1}/3 - ${body}`);
+          if(attempt<2){ console.log('[GroqWhisper] Groq rate limit hit. Waiting 60s for quota reset...'); await sleep(60000); continue; }
+          console.warn('[GroqWhisper] 429 persists after 3 retries - fallback partial transcript flag');
+          transcriptPartialFlag=true; try{fs.unlinkSync(tmpWav);}catch{} lastWhisperSegments=null; return null;
+        }
+        try{fs.unlinkSync(tmpWav);}catch{}
+        if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); lastWhisperSegments=null; return null;}
+        const j:any=await r.json(); if(Array.isArray((j as any).segments)) lastWhisperSegments=(j as any).segments; else lastWhisperSegments=null; const txt=((j as any).text||'').trim().slice(0,4000)||null; if(probeDur>7200&&txt) transcriptPartialFlag=true; return txt;
+      }catch(e:any){
+        const msg=String(e?.message||e);
+        if(msg.includes('429')||msg.toLowerCase().includes('rate limit')){
+          console.warn(`[GroqWhisper] 429 exception attempt ${attempt+1}/3 ${msg.slice(0,200)}`);
+          if(attempt<2){ await sleep(60000); continue; }
+          transcriptPartialFlag=true; try{fs.unlinkSync(tmpWav);}catch{} return null;
+        }
+        throw e;
+      }
+    }
+    try{fs.unlinkSync(tmpWav);}catch{} return null;
   }catch(e:any){console.warn('[GroqWhisper]',e?.message); try{fs.unlinkSync(tmpWav);}catch{} return null;}
+  finally{ release(); }
 }
 async function callMuseLLM(baseName:string,dur:number,transcript:string|null, contextPackage:any={}):Promise<any|null>{
   const k=(process.env.MUSE_API_KEY||process.env.GROQ_API_KEY||'').trim(); const u=(process.env.MUSE_BASE_URL||'https://api.groq.com/openai/v1').trim(); const m=(process.env.MUSE_MODEL||'openai/gpt-oss-120b').trim();
@@ -418,6 +446,8 @@ interface JobMeta {
   source_meta?: { title:string; description:string; channel:string; channel_id:string; upload_date:string; duration:number; view_count:number; like_count:number; categories:string[]; tags:string[]; extractor:string; url:string; };
   entities?: { people:string[]; brands:string[]; products:string[]; places:string[]; numbers:string[]; topics:string[]; pain_points:string[]; claims:string[]; };
   external_context?: { query:string; entity_type:string; title:string; snippet:string; url:string }[];
+  transcript_partial?: boolean;
+  groq_rate_limited?: boolean;
 }
 
 const DEFAULT_POSTING_SCHEDULE = {
@@ -804,7 +834,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       const {stdout}=await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
       const dur=parseFloat(stdout.trim())||30; probeDurForNarrative=dur;
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper: transcribe ${dur.toFixed(1)}s...`);
-      transcript=await transcribeWithGroq(inputPath);
+      transcript=await transcribeWithGroq(inputPath, dur);
       if(transcript) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper OK: ${(transcript.slice(0,60)).replace(/\n/g,' ')}...`);
       else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper kosong/skip — LLM tanpa transcript`);
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context: build source_meta+entities+Brave...`);
@@ -1040,7 +1070,9 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       clips: Array.isArray((llmData as any)?.clips) ? (llmData as any).clips.map((c:any)=>({ start_time:Number(c.start_time)||0, end_time:Number(c.end_time)||0, hook_text:String(c.hook_text||'').slice(0,120), seo_keyword:String(c.seo_keyword||'').slice(0,60), caption:String(c.caption||'').slice(0,500), hashtags:Array.isArray(c.hashtags)?c.hashtags.slice(0,8):[], cta_text:String(c.cta_text||'').slice(0,80), virality_score:normalizeViralityScore(c.virality_score), virality_badge:getViralityBadge(normalizeViralityScore(c.virality_score)).badge, virality_label:getViralityBadge(normalizeViralityScore(c.virality_score)).label, virality_emoji:getViralityBadge(normalizeViralityScore(c.virality_score)).emoji, is_primary:!!c.is_primary })) : [],
       source_meta: contextPackage?.source_meta || { title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' },
       entities: contextPackage?.entities || { people:[], brands:[], products:[], places:[], numbers:[], topics:[], pain_points:[], claims:[] },
-      external_context: contextPackage?.external_context || []
+      external_context: contextPackage?.external_context || [],
+      transcript_partial: transcriptPartialFlag,
+      groq_rate_limited: transcriptPartialFlag
     });
 
     broadcastSSE();
