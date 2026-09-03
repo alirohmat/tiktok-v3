@@ -833,19 +833,6 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
   const selectedTheme = BACKSOUND_MAP[themeKey] || BACKSOUND_MAP.auto;
 
   const baseCleanName = sourceName.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  // N-clip independent: filenames per LLM virality order
-  const maxClipsCap = probeDurForNarrative < 600 ? 2 : probeDurForNarrative < 3600 ? 3 : 5;
-  const activeClips = (llmData?.clips||[]).slice(0, maxClipsCap);
-  if(!activeClips.length){
-    // fallback auto clips if LLM empty
-    const fbDur = Math.min(30, Math.max(15, probeDurForNarrative/3));
-    activeClips.push({start_time:0, end_time:fbDur, hook_text:`Auto hook ${baseCleanName.slice(0,30)}`, seo_keyword:slugify(baseCleanName)+'-viral', caption:`Auto clip: ${baseCleanName}`, hashtags:['#fyp','#viral'], cta_text:'Save & Share ->', virality_score:50, virality_badge:'experimental', virality_label:'Eksperimental', virality_emoji:'\uD83E\uDDEA', is_primary:true});
-  }
-  if(activeClips.length===1) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] WARN: LLM returned 1 clip — generating single clip only (no lanjutan fallback)`);
-  const clip1Filename = `clip_1_${baseCleanName}_hook.mp4`;
-  const clip2Filename = `clip_2_${baseCleanName}_seo.mp4`;
-  const outClip1Path = path.join(rendersDir, clip1Filename);
-  const outClip2Path = path.join(rendersDir, clip2Filename);
 
   try {
     // 1. Ensure audio assets exist
@@ -880,26 +867,18 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       const d = segDur>5 ? segDur : probeDurForNarrative;
       narrativeMetrics = computeNarrativeMetrics(transcript, lastWhisperSegments, d);
     }catch(e:any){ console.warn('[Narrative]',e?.message); narrativeMetrics = computeNarrativeMetrics(transcript, null, probeDurForNarrative); }
+    // N-clip independent: cap by duration AFTER probe known
+    const maxClipsCap = probeDurForNarrative < 600 ? 2 : probeDurForNarrative < 3600 ? 3 : 5;
+    let activeClips:any[] = (llmData?.clips||[]).slice(0, maxClipsCap);
+    if(!activeClips.length){
+      const fbDur = Math.min(30, Math.max(15, probeDurForNarrative/3));
+      activeClips = [{start_time:0, end_time:fbDur, hook_text:`Auto hook ${baseCleanName.slice(0,30)}`, seo_keyword:slugify(baseCleanName)+'-viral', caption:`Auto clip: ${baseCleanName}`, hashtags:['#fyp','#viral'], cta_text:'Save & Share ->', virality_score:50, virality_badge:'experimental', virality_label:'Eksperimental', virality_emoji:'\uD83E\uDDEA', is_primary:true}];
+    }
+    if(activeClips.length===1) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] WARN: single clip only — no lanjutan fallback`);
     const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%');
 const wrapHook=(s:string,maxPerLine=22)=>{ const w=s.trim().slice(0,85); if(w.length<=maxPerLine) return w; let cut=w.lastIndexOf(' ',maxPerLine); if(cut<12) cut=maxPerLine; const l1=w.slice(0,cut).trim(), l2=w.slice(cut).trim().slice(0,26); return l2?`${l1}\n${l2}`:l1; };
 const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
-    // N-clip independent virality — no lanjutan fallback
-    const llmC1=activeClips[0]||null, llmC2=activeClips[1]||null;
-    const hook1=escWrap(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
-    const seo1=esc(llmC1?.seo_keyword||slugify(baseCleanName)+'-viral');
-    const cta1=esc(llmC1?.cta_text||'Save & Share ->');
-    const hook2=activeClips.length>1 ? escWrap(llmC2?.hook_text||`Hook 2 ${baseCleanName.slice(0,20)}`) : hook1;
-    const seo2=activeClips.length>1 ? esc(llmC2?.seo_keyword||slugify(baseCleanName)+'-part2') : seo1;
-    const cta2=activeClips.length>1 ? esc(llmC2?.cta_text||'Part 2 ->') : cta1;
-    const clip1Start=Math.max(0, Number(llmC1?.start_time)||0);
-    const clip1End=Math.max(clip1Start+5, Number(llmC1?.end_time)||clip1Start+30);
-    const clip1Dur=Math.min(45, clip1End-clip1Start);
-    // clip2 independent only if exists — no lanjutan
-    const clip2Exists = activeClips.length>1;
-    const clip2StartRaw= clip2Exists ? Number(llmC2?.start_time) : NaN;
-    const clip2EndRaw= clip2Exists ? Number(llmC2?.end_time) : NaN;
-    let clip2Start= clip2Exists && isFinite(clip2StartRaw) ? Math.max(0,clip2StartRaw) : -1;
-    let clip2Dur= clip2Exists && isFinite(clip2EndRaw)&&isFinite(clip2StartRaw) ? Math.min(45, clip2EndRaw-clip2StartRaw) : (clip2Exists?30:-1);
+    // dynamic helpers kept via esc/escWrap above — llm clips accessed per-index in loop
 
     // Phase 2: Pembersihan Filler Words & Dead-Air
     job.phase = 'clean fillers & silence';
@@ -910,132 +889,66 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     }
     broadcastSSE();
 
-    // Phase 3: Rendering Clip 1 (Hook Retention + Backsound + Seamless Loop)
-    job.phase = 'render clip 1';
-    job.progress = 0.55;
-    job.detail = 'FFmpeg 9:16 + Ducking + Loop 1';
-    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 3/5: Memproses Clip 1 (9:16 vertical crop + Injeksi backsound ${selectedTheme.title})`);
-    broadcastSSE();
-
-    // Construct FFmpeg Filter Graph for Clip 1 (30 seconds)
-    // Filter combines:
-    // 1. Video: 9:16 crop, 1080x1920 scale, drawtext watermark @brogalanblora
-    // 2. Audio: Voice + Backsound mixing (amix/ducking) + 19kHz Ultrasonic tone anti-duplicate
+    // Phase 3-4: N-clip dynamic render loop (ponytail complete)
     const hasBg = themeKey !== 'none' && fs.existsSync(bgAudioPath);
-    // P1-6 Seamless Loop: normalize LLM bridge
     const seamlessRaw = (llmData as any)?.seamless_loop || null;
     const loopNorm = normalizeSeamlessLoop(seamlessRaw);
-    const loop1 = loopNorm; const loop2 = loopNorm;
-    const loopFadeSec1 = loop1.crossfade_ms>0 ? Math.min(loop1.crossfade_ms/1000, Math.max(0, clip1Dur-0.5)) : 0;
-    const loopFadeSec2 = loop2.crossfade_ms>0 ? Math.min(loop2.crossfade_ms/1000, Math.max(0, clip2Dur-0.5)) : 0;
-    const loopAudioFade1 = loopFadeSec1>0 ? `afade=t=in:st=0:d=${loopFadeSec1.toFixed(3)},afade=t=out:st=${(clip1Dur-loopFadeSec1).toFixed(3)}:d=${loopFadeSec1.toFixed(3)}` : `afade=t=in:st=0:d=0.2,afade=t=out:st=${(clip1Dur-0.2).toFixed(3)}:d=0.2`;
-    const loopAudioFade2 = loopFadeSec2>0 ? `afade=t=in:st=0:d=${loopFadeSec2.toFixed(3)},afade=t=out:st=${(clip2Dur-loopFadeSec2).toFixed(3)}:d=${loopFadeSec2.toFixed(3)}` : `afade=t=in:st=0:d=0.2,afade=t=out:st=${(clip2Dur-0.2).toFixed(3)}:d=0.2`;
-    const loopVideoFade1 = loopFadeSec1>0 && loop1.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec1.toFixed(3)}:alpha=1,fade=t=out:st=${(clip1Dur-loopFadeSec1).toFixed(3)}:d=${loopFadeSec1.toFixed(3)}:alpha=1` : ``;
-    const loopVideoFade2 = loopFadeSec2>0 && loop2.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec2.toFixed(3)}:alpha=1,fade=t=out:st=${(clip2Dur-loopFadeSec2).toFixed(3)}:d=${loopFadeSec2.toFixed(3)}:alpha=1` : ``;
-    // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
-    const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
-      cleanFillersEnabled
-        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
-        : `[0:a]volume=1.2[vocal]`,
-      hasBg
-        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade1}[a_faded]`
-        : `[vocal]${loopAudioFade1}[a_faded]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
-    ].join(';');
-    const filterComplexNoBg = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
-      cleanFillersEnabled
-        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
-        : `[0:a]volume=1.2[vocal]`,
-      `[vocal]${loopAudioFade1}[a_faded]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
-    ].join(';');
-    // ponytail: clip2 distinct hook/seo/cta for sync
-    const filterComplex2 = [
-      `[0:v]scale=iw*1.10:ih*1.10,crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=red@0.7:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
-      cleanFillersEnabled
-        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
-        : `[0:a]volume=1.2[vocal]`,
-      hasBg
-        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade2}[a_faded]`
-        : `[vocal]${loopAudioFade2}[a_faded]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
-    ].join(';');
-    const filterComplexNoBg2 = [
-      `[0:v]scale=iw*1.10:ih*1.10,crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=red@0.7:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
-      cleanFillersEnabled
-        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
-        : `[0:a]volume=1.2[vocal]`,
-      `[vocal]${loopAudioFade2}[a_faded]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
-    ].join(';');
-
-    const cmdClip1 = hasBg
-      ? `ffmpeg -y -ss ${clip1Start} -t ${clip1Dur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`
-      : `ffmpeg -y -ss ${clip1Start} -t ${clip1Dur} -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`;
-
-    await execAsync(cmdClip1);
-
-    // Phase 4: Rendering Clip 2 (Independent viral #2 + Visual Hash Rebirth) — skip if only 1 clip
-    let clip2Ok = false;
-    if(clip2Exists && clip2Start>=0){
-      job.phase = 'render clip 2';
-      job.progress = 0.80;
-      job.detail = 'FFmpeg 9:16 + Zoom110% + Loop 2';
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 4/5: Memproses Clip 2 independent viral #2 start=${clip2Start}s hook=${(llmC2?.hook_text||'').slice(0,30)}`);
-      broadcastSSE();
-
-      const cmdClip2 = hasBg
-        ? `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
-        : `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -filter_complex "${filterComplexNoBg2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
-
-      try {
-        await execAsync(cmdClip2);
-        clip2Ok = fs.existsSync(outClip2Path) && fs.statSync(outClip2Path).size > 10000;
-        if (!clip2Ok) throw new Error('clip2 empty');
-      } catch (e2:any) {
-        job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip2 render failed: ${String(e2?.message||e2).slice(0,100)} — skip clip2`);
-        clip2Ok = false;
-      }
-    } else {
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 4/5: Skip clip2 — only 1 viral moment detected`);
-      broadcastSSE();
-    }
-
-    // Phase 5: Finalize & Register Real Files (N-clip dynamic)
-    job.phase = 'completed';
-    job.progress = 1.0;
-    job.status = 'SUCCESS';
     const generatedFiles:string[] = [];
-    const stat1 = fs.existsSync(outClip1Path) ? fs.statSync(outClip1Path) : { size: 0 };
-    if(stat1.size>0){ generatedFiles.push(clip1Filename); renders.set(`${jobId}-1`, { job_id: jobId, filename: clip1Filename, size: stat1.size, size_human: `${(stat1.size / 1024 / 1024).toFixed(1)} MB`, created_at: Date.now() }); }
-    else throw new Error('clip1 missing');
-    let stat2:any={size:0};
-    if(clip2Exists && clip2Ok){
-      stat2 = fs.existsSync(outClip2Path) ? fs.statSync(outClip2Path) : { size: 0 };
-      if(stat2.size>0){ generatedFiles.push(clip2Filename); renders.set(`${jobId}-2`, { job_id: jobId, filename: clip2Filename, size: stat2.size, size_human: `${(stat2.size / 1024 / 1024).toFixed(1)} MB`, created_at: Date.now() }); }
+    const clipFileInfos:{filename:string; clip:any; variant:any}[] = [];
+    for(let idx=0; idx<activeClips.length; idx++){
+      const clip = activeClips[idx];
+      const variant = visualForIdx(idx);
+      const hook = escWrap(clip?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
+      const seo = esc(clip?.seo_keyword||slugify(baseCleanName)+'-viral');
+      const cta = esc(clip?.cta_text|| (idx===0 ? 'Save & Share ->' : `Part ${idx+1} ->`));
+      const cStart = Math.max(0, Number(clip?.start_time)||0);
+      const cEnd = Math.max(cStart+5, Number(clip?.end_time)||cStart+30);
+      const cDur = Math.min(45, cEnd-cStart);
+      const filename = `clip_${idx+1}_${baseCleanName}_${slugify(clip?.seo_keyword||'viral')}.mp4`;
+      const outPath = path.join(rendersDir, filename);
+      const loopFadeSec = loopNorm.crossfade_ms>0 ? Math.min(loopNorm.crossfade_ms/1000, Math.max(0, cDur-0.5)) : 0;
+      const loopAudioFade = loopFadeSec>0 ? `afade=t=in:st=0:d=${loopFadeSec.toFixed(3)},afade=t=out:st=${(cDur-loopFadeSec).toFixed(3)}:d=${loopFadeSec.toFixed(3)}` : `afade=t=in:st=0:d=0.2,afade=t=out:st=${(cDur-0.2).toFixed(3)}:d=0.2`;
+      const loopVideoFade = loopFadeSec>0 && loopNorm.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec.toFixed(3)}:alpha=1,fade=t=out:st=${(cDur-loopFadeSec).toFixed(3)}:d=${loopFadeSec.toFixed(3)}:alpha=1` : ``;
+      const zoomPrefix = variant.zoom==='110%' ? 'scale=iw*1.10:ih*1.10,' : variant.zoom==='105%' ? 'scale=iw*1.05:ih*1.05,' : '';
+      job.phase = `render clip ${idx+1}`; job.progress = 0.55 + (idx/activeClips.length)*0.35;
+      job.detail = `FFmpeg 9:16 ${variant.label} Loop ${idx+1} start=${cStart}s`;
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase ${3+idx}/5: Clip ${idx+1}/${activeClips.length} start=${cStart}s dur=${cDur}s hook=${(clip?.hook_text||'').slice(0,30)} variant=${variant.label} zoom=${variant.zoom}`);
+      broadcastSSE();
+      const filterComplex = [
+        `[0:v]${zoomPrefix}crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook}':fontcolor=white:fontsize=48:box=1:boxcolor=${variant.box}:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade}[v_out]`,
+        cleanFillersEnabled ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]` : `[0:a]volume=1.2[vocal]`,
+        hasBg ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade}[a_faded]` : `[vocal]${loopAudioFade}[a_faded]`,
+        `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
+      ].join(';');
+      try{
+        const cmd = hasBg ? `ffmpeg -y -ss ${cStart} -t ${cDur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outPath}"` : `ffmpeg -y -ss ${cStart} -t ${cDur} -i "${inputPath}" -filter_complex "${filterComplex}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outPath}"`;
+        await execAsync(cmd);
+        const sz = fs.existsSync(outPath) ? fs.statSync(outPath).size : 0;
+        if(sz>10000){ generatedFiles.push(filename); renders.set(`${jobId}-${idx+1}`, {job_id:jobId, filename, size:sz, size_human:`${(sz/1024/1024).toFixed(1)} MB`, created_at:Date.now()}); clipFileInfos.push({filename, clip, variant}); }
+        else throw new Error('empty '+sz);
+      } catch(e:any){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip ${idx+1} render failed: ${String(e?.message||e).slice(0,120)}`); }
     }
-    // TODO ponytail: N>2 loop for(let i=2;i<activeClips.length;i++) render clip_i with visualForIdx(i)
-    job.result = generatedFiles;
-    job.finished_at = Date.now() / 1000;
-    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] SUCCESS — ${generatedFiles.length} file biner video MP4 1080x1920 HD berhasil dirender ke disk! visual hash ${clip2Exists?'zoom110% clip2':''}`);
+    if(!generatedFiles.length) throw new Error('All clips render failed');
+    // Phase 5: Finalize dynamic
+    job.phase = 'completed'; job.progress = 1.0; job.status = 'SUCCESS';
+    job.result = generatedFiles; job.finished_at = Date.now()/1000;
+    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] SUCCESS — ${generatedFiles.length} file MP4 1080x1920 visual hash loop`);
 
-    if (stat1.size === 0 || (clip2Exists && clip2Ok && stat2.size === 0)) throw new Error('Render output missing — check FFmpeg logs');
-
-    const cap1 = llmC1?.caption ? llmC1.caption : `Auto clip: ${baseCleanName} — edit caption sebelum upload`;
-    const cap2 = clip2Exists ? (llmC2?.caption ? llmC2.caption : `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual`) : cap1;
-    const hash1 = llmC1?.hashtags?.length ? llmC1.hashtags : ['#fyp','#tiktoktips'];
-    const hash2 = clip2Exists && llmC2?.hashtags?.length ? llmC2.hashtags : ['#edukasi','#cuan'];
-    const captionsObj:any = { [clip1Filename]: `${cap1} ${hash1.join(' ')}` };
-    const detailedCaptionsObj:any = { [clip1Filename]: { full_caption: cap1, hook_text: (llmC1?.hook_text || baseCleanName), body_text: cap1, hashtags: hash1, hashtags_str: hash1.join(' ') } };
-    if(clip2Exists && clip2Ok){ captionsObj[clip2Filename]=`${cap2} ${hash2.join(' ')}`; detailedCaptionsObj[clip2Filename]={ full_caption: cap2, hook_text: (llmC2?.hook_text || baseCleanName), body_text: cap2, hashtags: hash2, hashtags_str: hash2.join(' ') }; }
+    // Phase 5 dynamic: build maps from clipFileInfos (true N-clip)
+    const captionsObj:any={}; const detailedCaptionsObj:any={};
+    for(const info of clipFileInfos){
+      const cap = info.clip?.caption ? info.clip.caption : `Auto clip: ${baseCleanName}`;
+      const hs = info.clip?.hashtags?.length ? info.clip.hashtags : ['#fyp','#viral'];
+      captionsObj[info.filename]=`${cap} ${hs.join(' ')}`;
+      detailedCaptionsObj[info.filename]={full_caption:cap, hook_text:(info.clip?.hook_text||baseCleanName), body_text:cap, hashtags:hs, hashtags_str:hs.join(' ')};
+    }
+    if(!Object.keys(captionsObj).length){ const fbFn=generatedFiles[0]||`clip_1_${baseCleanName}.mp4`; captionsObj[fbFn]=`Auto clip: ${baseCleanName} #fyp #viral`; detailedCaptionsObj[fbFn]={full_caption:`Auto clip: ${baseCleanName}`, hook_text:baseCleanName, body_text:`Auto clip: ${baseCleanName}`, hashtags:['#fyp','#viral'], hashtags_str:'#fyp #viral'}; }
     jobMetas.set(jobId, {
       captions: captionsObj,
       detailed_captions: detailedCaptionsObj,
-      seamless_loop: (()=>{ const o:any={ [clip1Filename]: { enabled: seamlessEnabled, loop_score: loop1.loop_score, bridge_phrase: loop1.bridge_phrase, loop_transition: loop1.loop_transition, crossfade_ms: loop1.crossfade_ms } }; if(clip2Exists && clip2Ok) o[clip2Filename]={ enabled: seamlessEnabled, loop_score: loop2.loop_score, bridge_phrase: loop2.bridge_phrase, loop_transition: loop2.loop_transition, crossfade_ms: loop2.crossfade_ms }; return o; })(),
-      backsound: (()=>{ const o:any={ [clip1Filename]: { theme: selectedTheme.category, track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm: selectedTheme.bpm, ducking_db: selectedTheme.ducking, license: 'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned: false } }; if(clip2Exists && clip2Ok) o[clip2Filename]={ theme: selectedTheme.category, track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm: selectedTheme.bpm, ducking_db: selectedTheme.ducking, license: 'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned: false }; return o; })(),
-      narrative_cleaning: (()=>{ const nm=narrativeMetrics||computeNarrativeMetrics(transcript,null,probeDurForNarrative); const gateApplied=cleanFillersEnabled?'afftdn+agate':'bypass'; const w=nm.wpm; const oDur=probeDurForNarrative; const o:any={ [clip1Filename]: { enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: visualForIdx(0).label } }; if(clip2Exists && clip2Ok) o[clip2Filename]={ enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: visualForIdx(1).label }; return o; })(),
+      seamless_loop: (()=>{ const o:any={}; for(const info of clipFileInfos) o[info.filename]={enabled:seamlessEnabled, loop_score:loopNorm.loop_score, bridge_phrase:loopNorm.bridge_phrase, loop_transition:loopNorm.loop_transition, crossfade_ms:loopNorm.crossfade_ms}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={enabled:seamlessEnabled, loop_score:loopNorm.loop_score, bridge_phrase:loopNorm.bridge_phrase, loop_transition:loopNorm.loop_transition, crossfade_ms:loopNorm.crossfade_ms}; return o; })(),
+      backsound: (()=>{ const o:any={}; for(const info of clipFileInfos) o[info.filename]={theme:selectedTheme.category, track_title:`${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm:selectedTheme.bpm, ducking_db:selectedTheme.ducking, license:'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned:false}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={theme:selectedTheme.category, track_title:`${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm:selectedTheme.bpm, ducking_db:selectedTheme.ducking, license:'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned:false}; return o; })(),
+      narrative_cleaning: (()=>{ const nm=narrativeMetrics||computeNarrativeMetrics(transcript,null,probeDurForNarrative); const gateApplied=cleanFillersEnabled?'afftdn+agate':'bypass'; const w=nm.wpm; const oDur=probeDurForNarrative; const o:any={}; for(const info of clipFileInfos) o[info.filename]={enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: info.variant.label}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: visualForIdx(0).label}; return o; })(),
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
       engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; const ents=(contextPackage as any)?.entities || {people:[],brands:[],products:[],places:[],numbers:[],topics:[],pain_points:[],claims:[]}; const normComments=normalizeComments((llmData as any)?.comments, ents); const pin=normalizePinnedReply((llmData as any)?.pinned_reply, ents); const cta=getCtaTarget(ents, pin); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:normComments, pinned_reply:pin, cta_target:cta, ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
       clips: Array.isArray((llmData as any)?.clips) ? (llmData as any).clips.map((c:any)=>({ start_time:Number(c.start_time)||0, end_time:Number(c.end_time)||0, hook_text:String(c.hook_text||'').slice(0,120), seo_keyword:String(c.seo_keyword||'').slice(0,60), caption:String(c.caption||'').slice(0,500), hashtags:Array.isArray(c.hashtags)?c.hashtags.slice(0,8):[], cta_text:String(c.cta_text||'').slice(0,80), virality_score:normalizeViralityScore(c.virality_score), virality_badge:getViralityBadge(normalizeViralityScore(c.virality_score)).badge, virality_label:getViralityBadge(normalizeViralityScore(c.virality_score)).label, virality_emoji:getViralityBadge(normalizeViralityScore(c.virality_score)).emoji, is_primary:!!c.is_primary })) : [],
