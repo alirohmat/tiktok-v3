@@ -9,7 +9,7 @@ import { createServer as createViteServer } from 'vite';
 
 const execAsync = promisify(exec);
 
-const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk. SEAMLESS LOOP WAJIB return object seamless_loop {loop_score integer 0-100, bridge_phrase string kalimat penutup yang grammar memancing hook_text, loop_transition enum cut|fade|dissolve, crossfade_ms integer 200-500}. Konsep Syntactic Loop: bridge_phrase di akhir video harus nyambung sintaksis dengan hook_text di awal sehingga saat TikTok auto-loop kalimat jadi satu. Mis Hook uang 1,2 miliar bisa hilang dari TikTok! + Bridge Dan itulah alasan kenapa -> loop Dan itulah alasan kenapa uang 1,2 miliar bisa hilang dari TikTok! Lakukan analisis transcript untuk buat bridge_phrase paling mulus.`;
+const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk. SEAMLESS LOOP WAJIB return object seamless_loop {loop_score integer 0-100, bridge_phrase string kalimat penutup yang grammar memancing hook_text, loop_transition enum cut|fade|dissolve, crossfade_ms integer 200-500}. Konsep Syntactic Loop: bridge_phrase di akhir video harus nyambung sintaksis dengan hook_text di awal sehingga saat TikTok auto-loop kalimat jadi satu. Mis Hook uang 1,2 miliar bisa hilang dari TikTok! + Bridge Dan itulah alasan kenapa -> loop Dan itulah alasan kenapa uang 1,2 miliar bisa hilang dari TikTok! Lakukan analisis transcript untuk buat bridge_phrase paling mulus. MULTI-CLIP INDEPENDENT WAJIB: Return 2-3 clip VIRAL dengan start_time BERBEDA minimal 120 detik, JANGAN berurutan. Contoh BURUK clip1 0-30s clip2 30-60s berurutan. Contoh BAIK clip1 5-35s topik A, clip2 125-155s topik B, clip3 260-290s topik C. Setiap clip hook_text BERBEDA dan virality_score sendiri. Jumlah clip: durasi <10 menit max 2, 10-60 menit max 3, >60 menit max 5.`;
 function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
 function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
@@ -255,7 +255,8 @@ async function callMuseLLM(baseName:string,dur:number,transcript:string|null, co
   const metaBlock=sm?`\n=== SOURCE METADATA ===\nTitle: ${(sm.title||'').slice(0,120)}\nChannel: ${(sm.channel||'').slice(0,80)}${sm.channel_id?' ('+sm.channel_id+')':''}\nViews: ${sm.view_count||0} | Likes: ${sm.like_count||0} | Duration: ${sm.duration||0}s\nCategories: ${(sm.categories||[]).join(', ').slice(0,80)}\nTags: ${(sm.tags||[]).slice(0,8).join(', ').slice(0,120)}\nDescription: ${(sm.description||'').slice(0,500)}\n=== END SOURCE METADATA ===`:'';
   const entBlock=ent?`\n=== NLP ENTITIES ===\nPeople: ${(ent.people||[]).join(', ')||'-'}\nBrands: ${(ent.brands||[]).join(', ')||'-'}\nProducts: ${(ent.products||[]).join(', ')||'-'}\nPlaces: ${(ent.places||[]).join(', ')||'-'}\nNumbers: ${(ent.numbers||[]).join(', ')||'-'}\nTopics: ${(ent.topics||[]).join(', ')||'-'}\nPain Points: ${(ent.pain_points||[]).join(', ')||'-'}\nClaims: ${(ent.claims||[]).join(' | ').slice(0,300)||'-'}\n=== END NLP ENTITIES ===`:'';
   const extBlock=(ext&&ext.length)?`\n=== EXTERNAL CONTEXT ===\n`+ext.map((c:any)=>`Query(${c.entity_type}): ${c.query}\nTitle: ${c.title}\nSnippet: ${c.snippet}\nURL: ${c.url}`).join('\n---\n')+`\n=== END EXTERNAL CONTEXT ===`:'';
-  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s ${tr}${metaBlock}${entBlock}${extBlock} Buat 1-2 clip VIRAL: start_time & end_time HARUS sesuai momen paling retensi di transcript, 30-45s durasi, hook 5-12 kata dari transcript+entities, seo_keyword hyphen dari topik transcript/entities, caption keyword first 50 chars dari transcript, 3-5 hashtag dari transcript, CTA Save/Share. Gunakan SOURCE METADATA+NLP ENTITIES+EXTERNAL CONTEXT untuk memilih angle terkuat (people/brand/pain_point/number/trend) dan buat hook TIDAK generic. JANGAN klaim palsu di luar transcript/metadata/context. caption HARUS meringkas isi transcript, bukan generic. Return JSON.`;
+  const maxClips = dur < 600 ? 2 : dur < 3600 ? 3 : 5;
+  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s MAX_CLIPS=${maxClips} ${tr}${metaBlock}${entBlock}${extBlock} Buat ${maxClips} clip VIRAL INDEPENDENT: start_time & end_time HARUS momen retensi TERTINGGI dengan JARAK minimal 120 detik antar clip, JANGAN berurutan. 30-45s durasi per clip, hook 5-12 kata BERBEDA dari transcript+entities, seo_keyword hyphen BERBEDA, caption keyword first 50 chars, 3-5 hashtag. Gunakan SOURCE METADATA+NLP ENTITIES+EXTERNAL CONTEXT untuk angle terkuat. JANGAN klaim palsu. Return JSON dengan ${maxClips} clips.`;
   try{ const r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.35,response_format:{type:'json_object'}})}); if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
 }
 
@@ -804,6 +805,15 @@ interface ClipOptions {
   clean_sensitivity?: string;
 }
 
+const VISUAL_VARIANTS = [
+  { zoom:'100%', box:'black@0.6', label:'standard' },
+  { zoom:'110%', box:'red@0.7', label:'zoom-red' },
+  { zoom:'105%', box:'blue@0.6', label:'zoom-blue' },
+  { zoom:'110%', box:'cyan@0.6', label:'pitch-cyan' },
+  { zoom:'100%', box:'black@0.6', label:'pitch-extra' },
+];
+function visualForIdx(i:number){ return VISUAL_VARIANTS[i % VISUAL_VARIANTS.length]; }
+
 const BACKSOUND_MAP: Record<string, { file: string; title: string; bpm: number; category: string; ducking: string }> = {
   auto: { file: 'lofi_chill_90bpm.wav', title: 'Lofi Chill Tech Beat', bpm: 90, category: 'Edukasi & Bisnis', ducking: '-14dB vokal / -4dB jeda' },
   edukasi_bisnis: { file: 'lofi_chill_90bpm.wav', title: 'Lofi Chill Tech Beat', bpm: 90, category: 'Edukasi & Bisnis', ducking: '-14dB vokal / -4dB jeda' },
@@ -823,9 +833,17 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
   const selectedTheme = BACKSOUND_MAP[themeKey] || BACKSOUND_MAP.auto;
 
   const baseCleanName = sourceName.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  // N-clip independent: filenames per LLM virality order
+  const maxClipsCap = probeDurForNarrative < 600 ? 2 : probeDurForNarrative < 3600 ? 3 : 5;
+  const activeClips = (llmData?.clips||[]).slice(0, maxClipsCap);
+  if(!activeClips.length){
+    // fallback auto clips if LLM empty
+    const fbDur = Math.min(30, Math.max(15, probeDurForNarrative/3));
+    activeClips.push({start_time:0, end_time:fbDur, hook_text:`Auto hook ${baseCleanName.slice(0,30)}`, seo_keyword:slugify(baseCleanName)+'-viral', caption:`Auto clip: ${baseCleanName}`, hashtags:['#fyp','#viral'], cta_text:'Save & Share ->', virality_score:50, virality_badge:'experimental', virality_label:'Eksperimental', virality_emoji:'\uD83E\uDDEA', is_primary:true});
+  }
+  if(activeClips.length===1) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] WARN: LLM returned 1 clip — generating single clip only (no lanjutan fallback)`);
   const clip1Filename = `clip_1_${baseCleanName}_hook.mp4`;
   const clip2Filename = `clip_2_${baseCleanName}_seo.mp4`;
-
   const outClip1Path = path.join(rendersDir, clip1Filename);
   const outClip2Path = path.join(rendersDir, clip2Filename);
 
@@ -865,22 +883,23 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%');
 const wrapHook=(s:string,maxPerLine=22)=>{ const w=s.trim().slice(0,85); if(w.length<=maxPerLine) return w; let cut=w.lastIndexOf(' ',maxPerLine); if(cut<12) cut=maxPerLine; const l1=w.slice(0,cut).trim(), l2=w.slice(cut).trim().slice(0,26); return l2?`${l1}\n${l2}`:l1; };
 const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
-    const llmC1=llmData?.clips?.[0]||null, llmC2=llmData?.clips?.[1]||llmC1;
+    // N-clip independent virality — no lanjutan fallback
+    const llmC1=activeClips[0]||null, llmC2=activeClips[1]||null;
     const hook1=escWrap(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
     const seo1=esc(llmC1?.seo_keyword||slugify(baseCleanName)+'-viral');
     const cta1=esc(llmC1?.cta_text||'Save & Share ->');
-    const hook2=escWrap(llmC2?.hook_text||hook1);
-    const seo2=esc(llmC2?.seo_keyword||seo1);
-    const cta2=esc(llmC2?.cta_text||cta1);
-    // ponytail: clip timing from LLM transcript (start_time/end_time) → FFmpeg ss/t must match caption topic
+    const hook2=activeClips.length>1 ? escWrap(llmC2?.hook_text||`Hook 2 ${baseCleanName.slice(0,20)}`) : hook1;
+    const seo2=activeClips.length>1 ? esc(llmC2?.seo_keyword||slugify(baseCleanName)+'-part2') : seo1;
+    const cta2=activeClips.length>1 ? esc(llmC2?.cta_text||'Part 2 ->') : cta1;
     const clip1Start=Math.max(0, Number(llmC1?.start_time)||0);
     const clip1End=Math.max(clip1Start+5, Number(llmC1?.end_time)||clip1Start+30);
     const clip1Dur=Math.min(45, clip1End-clip1Start);
-    const clip2StartRaw=Number(llmC2?.start_time); const clip2EndRaw=Number(llmC2?.end_time);
-    // ponytail: clip2 defaults to second half if LLM only gives 1 clip or same timing
-    let clip2Start=isFinite(clip2StartRaw)&&llmData?.clips?.length>1?Math.max(0,clip2StartRaw):Math.max(clip1End, 30);
-    let clip2Dur=isFinite(clip2EndRaw)&&isFinite(clip2StartRaw)?Math.min(45, clip2EndRaw-clip2StartRaw):30;
-    if(clip2Start===clip1Start && llmData?.clips?.length<=1) clip2Dur=30;
+    // clip2 independent only if exists — no lanjutan
+    const clip2Exists = activeClips.length>1;
+    const clip2StartRaw= clip2Exists ? Number(llmC2?.start_time) : NaN;
+    const clip2EndRaw= clip2Exists ? Number(llmC2?.end_time) : NaN;
+    let clip2Start= clip2Exists && isFinite(clip2StartRaw) ? Math.max(0,clip2StartRaw) : -1;
+    let clip2Dur= clip2Exists && isFinite(clip2EndRaw)&&isFinite(clip2StartRaw) ? Math.min(45, clip2EndRaw-clip2StartRaw) : (clip2Exists?30:-1);
 
     // Phase 2: Pembersihan Filler Words & Dead-Air
     job.phase = 'clean fillers & silence';
@@ -934,7 +953,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     ].join(';');
     // ponytail: clip2 distinct hook/seo/cta for sync
     const filterComplex2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
+      `[0:v]scale=iw*1.10:ih*1.10,crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=red@0.7:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -944,7 +963,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
+      `[0:v]scale=iw*1.10:ih*1.10,crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=red@0.7:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -958,125 +977,65 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
 
     await execAsync(cmdClip1);
 
-    // Phase 4: Rendering Clip 2 (SEO & Call-to-Action)
-    job.phase = 'render clip 2';
-    job.progress = 0.80;
-    job.detail = 'FFmpeg 9:16 + Ducking + Loop 2';
-    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 4/5: Memproses Clip 2 (Segmen 30s-60s + Visual Hash Rebirth)`);
-    broadcastSSE();
-
-    const cmdClip2 = hasBg
-      ? `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
-      : `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -filter_complex "${filterComplexNoBg2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
-
+    // Phase 4: Rendering Clip 2 (Independent viral #2 + Visual Hash Rebirth) — skip if only 1 clip
     let clip2Ok = false;
-    try {
-      await execAsync(cmdClip2);
-      clip2Ok = fs.existsSync(outClip2Path) && fs.statSync(outClip2Path).size > 10000;
-      if (!clip2Ok) throw new Error('clip2 empty');
-    } catch (e2) {
-      let fbStart = 5, fbDur = 25;
+    if(clip2Exists && clip2Start>=0){
+      job.phase = 'render clip 2';
+      job.progress = 0.80;
+      job.detail = 'FFmpeg 9:16 + Zoom110% + Loop 2';
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 4/5: Memproses Clip 2 independent viral #2 start=${clip2Start}s hook=${(llmC2?.hook_text||'').slice(0,30)}`);
+      broadcastSSE();
+
+      const cmdClip2 = hasBg
+        ? `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
+        : `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -filter_complex "${filterComplexNoBg2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
+
       try {
-        const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
-        const dur = parseFloat(stdout.trim()) || 15;
-        fbStart = dur > 15 ? 5 : 0;
-        fbDur = Math.max(5, Math.min(25, dur - fbStart));
-      } catch {}
-      const fallbackCmd = `ffmpeg -y -ss ${fbStart} -t ${fbDur} -i "${inputPath}" -filter_complex "${filterComplexNoBg2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
-      await execAsync(fallbackCmd);
+        await execAsync(cmdClip2);
+        clip2Ok = fs.existsSync(outClip2Path) && fs.statSync(outClip2Path).size > 10000;
+        if (!clip2Ok) throw new Error('clip2 empty');
+      } catch (e2:any) {
+        job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip2 render failed: ${String(e2?.message||e2).slice(0,100)} — skip clip2`);
+        clip2Ok = false;
+      }
+    } else {
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 4/5: Skip clip2 — only 1 viral moment detected`);
+      broadcastSSE();
     }
 
-    // Phase 5: Finalize & Register Real Files
+    // Phase 5: Finalize & Register Real Files (N-clip dynamic)
     job.phase = 'completed';
     job.progress = 1.0;
     job.status = 'SUCCESS';
-    job.result = [clip1Filename, clip2Filename];
-    job.finished_at = Date.now() / 1000;
-    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] SUCCESS — 2 file biner video MP4 1080x1920 HD berhasil dirender ke disk!`);
-
+    const generatedFiles:string[] = [];
     const stat1 = fs.existsSync(outClip1Path) ? fs.statSync(outClip1Path) : { size: 0 };
-    const stat2 = fs.existsSync(outClip2Path) ? fs.statSync(outClip2Path) : { size: 0 };
-    if (stat1.size === 0 || stat2.size === 0) throw new Error('Render output missing — check FFmpeg logs');
+    if(stat1.size>0){ generatedFiles.push(clip1Filename); renders.set(`${jobId}-1`, { job_id: jobId, filename: clip1Filename, size: stat1.size, size_human: `${(stat1.size / 1024 / 1024).toFixed(1)} MB`, created_at: Date.now() }); }
+    else throw new Error('clip1 missing');
+    let stat2:any={size:0};
+    if(clip2Exists && clip2Ok){
+      stat2 = fs.existsSync(outClip2Path) ? fs.statSync(outClip2Path) : { size: 0 };
+      if(stat2.size>0){ generatedFiles.push(clip2Filename); renders.set(`${jobId}-2`, { job_id: jobId, filename: clip2Filename, size: stat2.size, size_human: `${(stat2.size / 1024 / 1024).toFixed(1)} MB`, created_at: Date.now() }); }
+    }
+    // TODO ponytail: N>2 loop for(let i=2;i<activeClips.length;i++) render clip_i with visualForIdx(i)
+    job.result = generatedFiles;
+    job.finished_at = Date.now() / 1000;
+    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] SUCCESS — ${generatedFiles.length} file biner video MP4 1080x1920 HD berhasil dirender ke disk! visual hash ${clip2Exists?'zoom110% clip2':''}`);
 
-    renders.set(`${jobId}-1`, {
-      job_id: jobId,
-      filename: clip1Filename,
-      size: stat1.size,
-      size_human: `${(stat1.size / 1024 / 1024).toFixed(1)} MB`,
-      created_at: Date.now()
-    });
-
-    renders.set(`${jobId}-2`, {
-      job_id: jobId,
-      filename: clip2Filename,
-      size: stat2.size,
-      size_human: `${(stat2.size / 1024 / 1024).toFixed(1)} MB`,
-      created_at: Date.now()
-    });
+    if (stat1.size === 0 || (clip2Exists && clip2Ok && stat2.size === 0)) throw new Error('Render output missing — check FFmpeg logs');
 
     const cap1 = llmC1?.caption ? llmC1.caption : `Auto clip: ${baseCleanName} — edit caption sebelum upload`;
-    const cap2 = llmC2?.caption ? llmC2.caption : `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual`;
+    const cap2 = clip2Exists ? (llmC2?.caption ? llmC2.caption : `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual`) : cap1;
     const hash1 = llmC1?.hashtags?.length ? llmC1.hashtags : ['#fyp','#tiktoktips'];
-    const hash2 = llmC2?.hashtags?.length ? llmC2.hashtags : ['#edukasi','#cuan'];
+    const hash2 = clip2Exists && llmC2?.hashtags?.length ? llmC2.hashtags : ['#edukasi','#cuan'];
+    const captionsObj:any = { [clip1Filename]: `${cap1} ${hash1.join(' ')}` };
+    const detailedCaptionsObj:any = { [clip1Filename]: { full_caption: cap1, hook_text: (llmC1?.hook_text || baseCleanName), body_text: cap1, hashtags: hash1, hashtags_str: hash1.join(' ') } };
+    if(clip2Exists && clip2Ok){ captionsObj[clip2Filename]=`${cap2} ${hash2.join(' ')}`; detailedCaptionsObj[clip2Filename]={ full_caption: cap2, hook_text: (llmC2?.hook_text || baseCleanName), body_text: cap2, hashtags: hash2, hashtags_str: hash2.join(' ') }; }
     jobMetas.set(jobId, {
-      captions: {
-        [clip1Filename]: `${cap1} ${hash1.join(' ')}`,
-        [clip2Filename]: `${cap2} ${hash2.join(' ')}`
-      },
-      detailed_captions: {
-        [clip1Filename]: {
-          full_caption: cap1,
-          hook_text: (llmC1?.hook_text || baseCleanName),
-          body_text: cap1,
-          hashtags: hash1,
-          hashtags_str: hash1.join(' ')
-        },
-        [clip2Filename]: {
-          full_caption: cap2,
-          hook_text: (llmC2?.hook_text || baseCleanName),
-          body_text: cap2,
-          hashtags: hash2,
-          hashtags_str: hash2.join(' ')
-        }
-      },
-      seamless_loop: {
-        [clip1Filename]: {
-          enabled: seamlessEnabled,
-          loop_score: loop1.loop_score,
-          bridge_phrase: loop1.bridge_phrase,
-          loop_transition: loop1.loop_transition,
-          crossfade_ms: loop1.crossfade_ms
-        },
-        [clip2Filename]: {
-          enabled: seamlessEnabled,
-          loop_score: loop2.loop_score,
-          bridge_phrase: loop2.bridge_phrase,
-          loop_transition: loop2.loop_transition,
-          crossfade_ms: loop2.crossfade_ms
-        }
-      },
-      backsound: {
-        [clip1Filename]: {
-          theme: selectedTheme.category,
-          track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`,
-          bpm: selectedTheme.bpm,
-          ducking_db: selectedTheme.ducking,
-          license: 'Generated locally (check TikTok Commercial Music Library before monetize)',
-          audio_hash_cleaned: false
-        },
-        [clip2Filename]: {
-          theme: selectedTheme.category,
-          track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`,
-          bpm: selectedTheme.bpm,
-          ducking_db: selectedTheme.ducking,
-          license: 'Generated locally (check TikTok Commercial Music Library before monetize)',
-          audio_hash_cleaned: false
-        }
-      },
-      narrative_cleaning: (()=>{ const nm=narrativeMetrics||computeNarrativeMetrics(transcript,null,probeDurForNarrative); const gateApplied=cleanFillersEnabled?'afftdn+agate':'bypass'; const w=nm.wpm; const oDur=probeDurForNarrative; return {
-        [clip1Filename]: { enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0 },
-        [clip2Filename]: { enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0 }
-      }; })(),
+      captions: captionsObj,
+      detailed_captions: detailedCaptionsObj,
+      seamless_loop: (()=>{ const o:any={ [clip1Filename]: { enabled: seamlessEnabled, loop_score: loop1.loop_score, bridge_phrase: loop1.bridge_phrase, loop_transition: loop1.loop_transition, crossfade_ms: loop1.crossfade_ms } }; if(clip2Exists && clip2Ok) o[clip2Filename]={ enabled: seamlessEnabled, loop_score: loop2.loop_score, bridge_phrase: loop2.bridge_phrase, loop_transition: loop2.loop_transition, crossfade_ms: loop2.crossfade_ms }; return o; })(),
+      backsound: (()=>{ const o:any={ [clip1Filename]: { theme: selectedTheme.category, track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm: selectedTheme.bpm, ducking_db: selectedTheme.ducking, license: 'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned: false } }; if(clip2Exists && clip2Ok) o[clip2Filename]={ theme: selectedTheme.category, track_title: `${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm: selectedTheme.bpm, ducking_db: selectedTheme.ducking, license: 'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned: false }; return o; })(),
+      narrative_cleaning: (()=>{ const nm=narrativeMetrics||computeNarrativeMetrics(transcript,null,probeDurForNarrative); const gateApplied=cleanFillersEnabled?'afftdn+agate':'bypass'; const w=nm.wpm; const oDur=probeDurForNarrative; const o:any={ [clip1Filename]: { enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: visualForIdx(0).label } }; if(clip2Exists && clip2Ok) o[clip2Filename]={ enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: visualForIdx(1).label }; return o; })(),
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
       engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; const ents=(contextPackage as any)?.entities || {people:[],brands:[],products:[],places:[],numbers:[],topics:[],pain_points:[],claims:[]}; const normComments=normalizeComments((llmData as any)?.comments, ents); const pin=normalizePinnedReply((llmData as any)?.pinned_reply, ents); const cta=getCtaTarget(ents, pin); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:normComments, pinned_reply:pin, cta_target:cta, ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
       clips: Array.isArray((llmData as any)?.clips) ? (llmData as any).clips.map((c:any)=>({ start_time:Number(c.start_time)||0, end_time:Number(c.end_time)||0, hook_text:String(c.hook_text||'').slice(0,120), seo_keyword:String(c.seo_keyword||'').slice(0,60), caption:String(c.caption||'').slice(0,500), hashtags:Array.isArray(c.hashtags)?c.hashtags.slice(0,8):[], cta_text:String(c.cta_text||'').slice(0,80), virality_score:normalizeViralityScore(c.virality_score), virality_badge:getViralityBadge(normalizeViralityScore(c.virality_score)).badge, virality_label:getViralityBadge(normalizeViralityScore(c.virality_score)).label, virality_emoji:getViralityBadge(normalizeViralityScore(c.virality_score)).emoji, is_primary:!!c.is_primary })) : [],
