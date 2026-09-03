@@ -9,12 +9,66 @@ import { createServer as createViteServer } from 'vite';
 
 const execAsync = promisify(exec);
 
-const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null.`;
+const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata.`;
 function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
 function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
 function normalizeNicheTier(v:any): 'low'|'medium'|'high' { const s=String(v??'').toLowerCase().trim(); if(s==='high'||s==='tinggi'||s.includes('8-15')||s.includes('15%')||s==='high-profit'||s==='premium') return 'high'; if(s==='medium'||s==='mid'||s==='sedang'||s.includes('4-8')||s.includes('medium')) return 'medium'; if(s==='low'||s==='rendah') return 'low'; if(s.includes('high')) return 'high'; if(s.includes('medium')||s.includes('mid')) return 'medium'; return 'low'; }
 function normalizeNiche(raw:any){ const tag=(typeof raw?.tag==='string'&&raw.tag.trim())?raw.tag.trim().toLowerCase().slice(0,32): (typeof raw?.niche_tag==='string'&&raw.niche_tag.trim()?raw.niche_tag.trim().toLowerCase().slice(0,32):'unknown'); const tier=normalizeNicheTier(raw?.tier??raw?.niche_profit_tier); let sc=Number(raw?.score??raw?.niche_score); if(!Number.isFinite(sc)) sc=0; sc=Math.round(Math.max(0,Math.min(100,sc))); const llmAdv=(typeof raw?.advisory==='string'&&raw.advisory.trim())?raw.advisory.trim().slice(0,200): (typeof raw?.niche_advisory==='string'&&raw.niche_advisory.trim()?raw.niche_advisory.trim().slice(0,200):''); const tierAdvice=tier==='high'?'High profit niche': tier==='medium'?'Medium niche':'Low niche — cek riset'; const bestSlot=tier==='high'?'06:30 & 19:00 WIB': tier==='medium'?'19:00 WIB':'19:30 WIB'; const adv=llmAdv ? (llmAdv.toLowerCase().includes(tag) ? llmAdv : `${tag} — ${llmAdv}`) : `${tag} — ${tierAdvice} — upload ${bestSlot}`; return {tag,tier,score:sc,advisory:adv}; }
+function extractContextEntities(sourceMeta:any, transcript:string|null){
+  const txt=[sourceMeta?.title||'', sourceMeta?.description||'', (sourceMeta?.tags||[]).join(' '), transcript||''].join(' ').slice(0,6000);
+  const lower=txt.toLowerCase();
+  const people:string[]=[]; const peopleRe=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g; let m:RegExpExecArray|null; while((m=peopleRe.exec(txt))&&people.length<8){ const v=m[1].trim(); if(v.length>=5&&v.length<=40&&!/^(Video|Channel|TikTok|YouTube|Save|Share)/i.test(v)) people.push(v); }
+  const brands=Array.from(new Set((txt.match(/\b(?:Samsung|iPhone|Apple|Xiaomi|Oppo|Vivo|Wardah|Skintific|Somethinc|Scarlett|Emina|Azarine|Implora|Hanasui|Garnier|L'Oreal|Nivea|Vaseline|Erha|Avoskin|Whitelab|Shopee|Tokopedia|Lazada|TikTok Shop|Grab|Gojek|BCA|BRI|BNI|Mandiri|Dana|OVO|Gopay|Indomie|Mixue|JCO|Starbucks|McD|KFC|Uniqlo|Zara|H&M|Nike|Adidas|Honda|Yamaha|Toyota|Mitsubishi|Tesla|BYD|Wuling)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
+  const products=Array.from(new Set((txt.match(/\b(?:serum|moisturizer|sunscreen|toner|cream|lotion|lipstik|foundation|cushion|skincare|parfum|handphone|hp|iphone|samsung|laptop|ayam|bakso|sate|rendang|kopi|sambal|cumi|teri|obat|suplemen|vitamin|diet|jerawat|flek|whitening|acne|glowing)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
+  const places=Array.from(new Set((txt.match(/\b(?:Jakarta|Surabaya|Bandung|Blora|Tuban|Lasem|Bali|Jogja|Semarang|Medan|Indonesia|Jawa|Korea|Jepang|USA|Amerika|China|Thailand)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
+  const numbers=Array.from(new Set((txt.match(/\b\d+(?:[.,]\d+)?\s*(?:%|juta|miliar|ribu|kg|gram|ml|cm|tahun|bulan|hari|kali|x|rupiah|rp|dollar|\$|jt|m|k)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
+  const pain_points=Array.from(new Set((lower.match(/\b(?:jerawat|flek hitam|kusam|berminyak|kering|iritasi|breakout|pori-pori|ketombe|rontok|bau badan|overthinking|insomnia|stress|cemas|utang|bangkrut|rugi|gagal|ditipu|penipuan|scam|nyeri|sakit|pegal|lambung|maag|diet gagal|berat badan|gemuk|kurus)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
+  const topics=Array.from(new Set((lower.match(/\b(?:keuangan|investasi|saham|crypto|trading|affiliate|jualan|bisnis|kuliner|resep|masak|skincare|kecantikan|makeup|kesehatan|diet|olahraga|teknologi|gadget|review|unboxing|tutorial|viral|fyp|edukasi|motivasi|cerita|misteri|sejarah)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
+  const claims:string[]=[]; const claimRe=/(?:klaim|terbukti|hasil|efek|manfaat|bisa|dapat|mampu)[^.!?]{10,80}[.!?]/gi; let cm:RegExpExecArray|null; while((cm=claimRe.exec(txt))&&claims.length<5){ claims.push(cm[0].trim().slice(0,120)); }
+  return { people:Array.from(new Set(people)).slice(0,5), brands, products, places, numbers, topics, pain_points, claims };
+}
+async function searchBraveContext(query:string, entity_type:string, timeoutMs=5000):Promise<{query:string,entity_type:string,title:string,snippet:string,url:string}|null>{
+  const key=(process.env.BRAVE_SEARCH_API_KEY||process.env.BRAVE_API_KEY||'').trim();
+  if(!key||key.includes('your_')) return null;
+  const controller=new AbortController(); const t=setTimeout(()=>controller.abort(), timeoutMs);
+  try{
+    const r=await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=3&freshness=pm`,{headers:{'Accept':'application/json','X-Subscription-Token':key},signal:controller.signal});
+    clearTimeout(t);
+    if(!r.ok){ console.warn('[Brave]',r.status,(await r.text()).slice(0,120)); return null; }
+    const j:any=await r.json(); const first=j.web?.results?.[0]||j.results?.[0]; if(!first) return null;
+    return { query, entity_type, title:(first.title||'').slice(0,120), snippet:(first.description||first.snippet||'').slice(0,280), url:first.url||'' };
+  }catch(e:any){ clearTimeout(t); console.warn('[Brave]',e?.message?.slice(0,80)||e); return null; }
+}
+function lookupYtdlpUrlByFilename(filename:string):string|null{
+  for(const job of (ytdlpJobs as any).values()){ if(job.filename===filename || job.filepath?.endsWith(filename)) return job.url||null; }
+  return null;
+}
+async function extractYtdlpMetadata(url:string):Promise<any|null>{
+  try{
+    const { stdout }=await execAsync(`/usr/local/bin/yt-dlp --dump-json --no-playlist "${url.replace(/"/g,'\"')}"`, { timeout:30000 } as any);
+    const info=JSON.parse(stdout);
+    return { title:(info.title||'').slice(0,200), description:(info.description||'').slice(0,800), channel:info.uploader||info.channel||info.uploader_id||'', channel_id:info.channel_id||info.uploader_id||'', upload_date:info.upload_date||'', duration:info.duration||0, view_count:info.view_count||0, like_count:info.like_count||0, categories:info.categories||[], tags:(info.tags||[]).slice(0,20), extractor:info.extractor||'', url };
+  }catch(e:any){ console.warn('[ytdlp-meta]',String(e?.message||e).slice(0,120)); return null; }
+}
+async function buildContextPackage(sourceName:string, transcript:string|null):Promise<{source_meta:any, entities:any, external_context:any[]}>{
+  let source_meta:any=null; let url:string|null=lookupYtdlpUrlByFilename(sourceName);
+  if(url){ console.log(`[Context] Found URL for ${sourceName}: ${url.slice(0,80)}`); source_meta=await extractYtdlpMetadata(url); }
+  if(!source_meta){ console.log(`[Context] No URL for ${sourceName}, using filename as title`); source_meta={ title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' }; }
+  const entities=extractContextEntities(source_meta, transcript);
+  const braveKey=(process.env.BRAVE_SEARCH_API_KEY||process.env.BRAVE_API_KEY||'').trim();
+  if(!braveKey||braveKey.includes('your_')){ console.warn('[Brave] skipped: no BRAVE_SEARCH_API_KEY'); return { source_meta, entities, external_context:[] }; }
+  const queries:{q:string,t:string}[]=[];
+  if(entities.brands[0]||entities.products[0]) queries.push({q:(entities.brands[0]||entities.products[0])+(entities.topics[0]?' '+entities.topics[0]:''), t:'brand/product'});
+  if(entities.people[0]) queries.push({q:entities.people[0], t:'people'});
+  if(entities.pain_points[0]) queries.push({q:entities.pain_points[0]+(entities.topics[0]?' '+entities.topics[0]:''), t:'pain_point'});
+  if(entities.topics[0]) queries.push({q:entities.topics[0]+' trending Indonesia 2024', t:'trend'});
+  if(entities.numbers[0]||entities.claims[0]) queries.push({q:(entities.numbers[0]||entities.claims[0]||'').slice(0,60), t:'claim'});
+  const uniq=Array.from(new Map(queries.map(x=>[x.q,x])).values()).slice(0,5);
+  const results=await Promise.all(uniq.map(x=>searchBraveContext(x.q,x.t,5000)));
+  const external_context=results.filter(Boolean) as any[];
+  return { source_meta, entities, external_context };
+}
 function buildPostingSchedule(tier:'low'|'medium'|'high'){ const isHigh=tier==='high', isMed=tier==='medium'; const slots=[ {slot:'Pagi Hari (06:30 - 08:30 WIB)',time_range:'06:30 - 08:30 WIB',category:'Morning Commute & Breakfast (WIB)',traffic:isHigh?'Sangat Tinggi' as const:'Tinggi' as const,description:isHigh?'Golden pagi niche high — prioritas upload pagi':'Cocok untuk edukasi ringkas pagi',is_golden:isHigh}, {slot:'Siang Hari (11:45 - 13:15 WIB)',time_range:'11:45 - 13:15 WIB',category:'Lunch Break & Relax',traffic:'Tinggi' as const,description:'Traffic siang stabil',is_golden:false}, {slot:'Sore Hari (16:30 - 18:00 WIB)',time_range:'16:30 - 18:00 WIB',category:'Teatime & Heading Home',traffic:'Sedang' as const,description:'Pemanasan algoritma sore',is_golden:false}, {slot:'Malam Hari (19:00 - 21:00 WIB)',time_range:'19:00 - 21:00 WIB',category:'Golden Prime Time WIB',traffic:'Sangat Tinggi' as const,description:isHigh?'Prime malam — slot kedua high tier':'Prime malam — slot utama low/medium',is_golden:true} ]; const best=isHigh?'06:30 - 08:30 WIB (Pagi Golden - niche high)': isMed?'19:00 - 21:00 WIB (Prime Time - niche medium)':'19:00 - 21:00 WIB (Prime Time - niche low, slot lebih akhir)'; const advice=isHigh?'Upload 06:30 WIB (utama) + 19:00 WIB (kedua) — high tier prioritas pagi':'Upload 19:00 WIB — niche '+tier; return {timezone:'Asia/Jakarta (WIB)',slots,best_slot_today:best,advice}; }
 async function transcribeWithGroq(inputPath:string):Promise<string|null>{
   const k=(process.env.GROQ_API_KEY||'').trim(); if(!k||k.includes('your_')) return null;
@@ -32,11 +86,15 @@ async function transcribeWithGroq(inputPath:string):Promise<string|null>{
     const j:any=await r.json(); return (j.text||'').trim().slice(0,4000)||null;
   }catch(e:any){console.warn('[GroqWhisper]',e?.message); try{fs.unlinkSync(tmpWav);}catch{} return null;}
 }
-async function callMuseLLM(baseName:string,dur:number,transcript:string|null):Promise<any|null>{
+async function callMuseLLM(baseName:string,dur:number,transcript:string|null, contextPackage:any={}):Promise<any|null>{
   const k=(process.env.MUSE_API_KEY||process.env.GROQ_API_KEY||'').trim(); const u=(process.env.MUSE_BASE_URL||'https://api.groq.com/openai/v1').trim(); const m=(process.env.MUSE_MODEL||'openai/gpt-oss-120b').trim();
   if(!k||k.includes('your_')){console.log('[LLM] skip placeholder'); return null;}
   const tr=transcript?`TRANSCRIPT (wajib pakai untuk caption/hook/seo, JANGAN ngarang): """${transcript.slice(0,3000)}"""`:`Tanpa transcript (file testsrc), buat generic.`;
-  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s ${tr} Buat 1-2 clip VIRAL: start_time & end_time HARUS sesuai momen paling retensi di transcript, 30-45s durasi, hook 5-12 kata dari transcript, seo_keyword hyphen dari topik transcript, caption keyword first 50 chars dari transcript, 3-5 hashtag dari transcript, CTA Save/Share. caption HARUS meringkas isi transcript, bukan generic. Return JSON.`;
+  const sm=contextPackage?.source_meta; const ent=contextPackage?.entities; const ext=contextPackage?.external_context;
+  const metaBlock=sm?`\n=== SOURCE METADATA ===\nTitle: ${(sm.title||'').slice(0,120)}\nChannel: ${(sm.channel||'').slice(0,80)}${sm.channel_id?' ('+sm.channel_id+')':''}\nViews: ${sm.view_count||0} | Likes: ${sm.like_count||0} | Duration: ${sm.duration||0}s\nCategories: ${(sm.categories||[]).join(', ').slice(0,80)}\nTags: ${(sm.tags||[]).slice(0,8).join(', ').slice(0,120)}\nDescription: ${(sm.description||'').slice(0,500)}\n=== END SOURCE METADATA ===`:'';
+  const entBlock=ent?`\n=== NLP ENTITIES ===\nPeople: ${(ent.people||[]).join(', ')||'-'}\nBrands: ${(ent.brands||[]).join(', ')||'-'}\nProducts: ${(ent.products||[]).join(', ')||'-'}\nPlaces: ${(ent.places||[]).join(', ')||'-'}\nNumbers: ${(ent.numbers||[]).join(', ')||'-'}\nTopics: ${(ent.topics||[]).join(', ')||'-'}\nPain Points: ${(ent.pain_points||[]).join(', ')||'-'}\nClaims: ${(ent.claims||[]).join(' | ').slice(0,300)||'-'}\n=== END NLP ENTITIES ===`:'';
+  const extBlock=(ext&&ext.length)?`\n=== EXTERNAL CONTEXT ===\n`+ext.map((c:any)=>`Query(${c.entity_type}): ${c.query}\nTitle: ${c.title}\nSnippet: ${c.snippet}\nURL: ${c.url}`).join('\n---\n')+`\n=== END EXTERNAL CONTEXT ===`:'';
+  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s ${tr}${metaBlock}${entBlock}${extBlock} Buat 1-2 clip VIRAL: start_time & end_time HARUS sesuai momen paling retensi di transcript, 30-45s durasi, hook 5-12 kata dari transcript+entities, seo_keyword hyphen dari topik transcript/entities, caption keyword first 50 chars dari transcript, 3-5 hashtag dari transcript, CTA Save/Share. Gunakan SOURCE METADATA+NLP ENTITIES+EXTERNAL CONTEXT untuk memilih angle terkuat (people/brand/pain_point/number/trend) dan buat hook TIDAK generic. JANGAN klaim palsu di luar transcript/metadata/context. caption HARUS meringkas isi transcript, bukan generic. Return JSON.`;
   try{ const r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.35,response_format:{type:'json_object'}})}); if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
 }
 
@@ -231,6 +289,9 @@ interface JobMeta {
     niche_advisory: string;
     comments: string[];
   };
+  source_meta?: { title:string; description:string; channel:string; channel_id:string; upload_date:string; duration:number; view_count:number; like_count:number; categories:string[]; tags:string[]; extractor:string; url:string; };
+  entities?: { people:string[]; brands:string[]; products:string[]; places:string[]; numbers:string[]; topics:string[]; pain_points:string[]; claims:string[]; };
+  external_context?: { query:string; entity_type:string; title:string; snippet:string; url:string }[];
 }
 
 const DEFAULT_POSTING_SCHEDULE = {
@@ -612,7 +673,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     job.detail = 'Groq Whisper transcript → LLM';
     job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 1/5: Transcript Groq Whisper → LLM brain`);
     broadcastSSE();
-    let llmData:any=null; let transcript:string|null=null;
+    let llmData:any=null; let transcript:string|null=null; let contextPackage:any={ source_meta:null, entities:null, external_context:[] };
     try{
       const {stdout}=await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
       const dur=parseFloat(stdout.trim())||30;
@@ -620,8 +681,10 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       transcript=await transcribeWithGroq(inputPath);
       if(transcript) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper OK: ${(transcript.slice(0,60)).replace(/\n/g,' ')}...`);
       else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper kosong/skip — LLM tanpa transcript`);
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context: build source_meta+entities+Brave...`);
+      try{ contextPackage=await buildContextPackage(sourceName, transcript); job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context OK: title="${(contextPackage.source_meta?.title||'').slice(0,40)}" entities=${(contextPackage.entities?.people?.length||0)}p/${(contextPackage.entities?.brands?.length||0)}b/${(contextPackage.entities?.pain_points?.length||0)}pp external=${contextPackage.external_context?.length||0}`); }catch(ce:any){ console.warn('[Context]',ce?.message); job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context skip: ${String(ce?.message||ce).slice(0,80)}`); }
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM: Muse/Groq caption/hashtag...`);
-      llmData=await callMuseLLM(baseCleanName, dur, transcript);
+      llmData=await callMuseLLM(baseCleanName, dur, transcript, contextPackage);
       if(llmData?.clips?.length) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) hook=${(llmData.clips[0]?.hook_text||'').slice(0,40)} seo=${llmData.clips[0]?.seo_keyword||''}`);
       else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM skip/fallback — pakai caption auto jujur`);
     }catch(e:any){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM error: ${e?.message||e}`); }
@@ -847,7 +910,10 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
         }
       },
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
-      engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:[]}; })()
+      engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:[]}; })(),
+      source_meta: contextPackage?.source_meta || { title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' },
+      entities: contextPackage?.entities || { people:[], brands:[], products:[], places:[], numbers:[], topics:[], pain_points:[], claims:[] },
+      external_context: contextPackage?.external_context || []
     });
 
     broadcastSSE();
