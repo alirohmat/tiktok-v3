@@ -9,6 +9,17 @@ import { createServer as createViteServer } from 'vite';
 
 const execAsync = promisify(exec);
 
+const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"8-15%","niche_approved":true} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share.`;
+function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
+function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
+function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
+async function callMuseLLM(baseName:string,dur:number):Promise<any|null>{
+  const k=(process.env.MUSE_API_KEY||process.env.GROQ_API_KEY||'').trim(); const u=(process.env.MUSE_BASE_URL||'https://api.groq.com/openai/v1').trim(); const m=(process.env.MUSE_MODEL||'openai/gpt-oss-120b').trim();
+  if(!k||k.includes('your_')){console.log('[LLM] skip placeholder'); return null;}
+  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s Buat 1-2 clip 30-60s hook 5-12 kata seo hyphen caption keyword first50 3-5 hashtag CTA Save/Share niche. Return JSON.`;
+  try{ const r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.4,response_format:{type:'json_object'}})}); if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -574,13 +585,30 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     await ensureAudioAssets();
     const bgAudioPath = path.join(audioAssetsDir, selectedTheme.file);
 
-    // Phase 1: Analisis input
+    // Phase 1: Analisis input + LLM brain (caption/hashtag/hook)
     job.status = 'PROCESSING';
     job.phase = 'extract audio & probe';
     job.progress = 0.15;
-    job.detail = 'FFprobe parameter video';
-    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 1/5: FFprobe membaca resolusi & durasi audio video`);
+    job.detail = 'FFprobe + LLM caption/hashtag';
+    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 1/5: FFprobe + LLM brain (caption/hashtag/hook)`);
     broadcastSSE();
+    let llmData:any=null;
+    try{
+      const {stdout}=await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
+      const dur=parseFloat(stdout.trim())||30;
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM: panggil Muse/Groq untuk caption/hashtag...`);
+      llmData=await callMuseLLM(baseCleanName, dur);
+      if(llmData?.clips?.length) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) hook=${(llmData.clips[0]?.hook_text||'').slice(0,40)}`);
+      else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM skip/fallback — pakai caption auto jujur`);
+    }catch(e:any){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM error: ${e?.message||e}`); }
+    const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%').slice(0,70);
+    const llmC1=llmData?.clips?.[0]||null, llmC2=llmData?.clips?.[1]||llmC1;
+    const hook1=esc(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
+    const seo1=esc(llmC1?.seo_keyword||slugify(baseCleanName)+'-viral');
+    const cta1=esc(llmC1?.cta_text||'Save & Share ->');
+    const hook2=esc(llmC2?.hook_text||hook1);
+    const seo2=esc(llmC2?.seo_keyword||seo1);
+    const cta2=esc(llmC2?.cta_text||cta1);
 
     // Phase 2: Pembersihan Filler Words & Dead-Air
     job.phase = 'clean fillers & silence';
@@ -605,7 +633,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const hasBg = themeKey !== 'none' && fs.existsSync(bgAudioPath);
     // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
     const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='AUTO HOOK':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='edit before upload':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='Save \\& Share ->':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -615,7 +643,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='AUTO HOOK':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='edit before upload':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='Save \\& Share ->':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -685,25 +713,29 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       created_at: Date.now()
     });
 
+    const cap1 = llmC1?.caption ? llmC1.caption : `Auto clip: ${baseCleanName} — edit caption sebelum upload`;
+    const cap2 = llmC2?.caption ? llmC2.caption : `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual`;
+    const hash1 = llmC1?.hashtags?.length ? llmC1.hashtags : ['#fyp','#tiktoktips'];
+    const hash2 = llmC2?.hashtags?.length ? llmC2.hashtags : ['#edukasi','#cuan'];
     jobMetas.set(jobId, {
       captions: {
-        [clip1Filename]: `Auto clip: ${baseCleanName} — edit caption sebelum upload #fyp #tiktoktips`,
-        [clip2Filename]: `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual #edukasi #cuan`
+        [clip1Filename]: `${cap1} ${hash1.join(' ')}`,
+        [clip2Filename]: `${cap2} ${hash2.join(' ')}`
       },
       detailed_captions: {
         [clip1Filename]: {
-          full_caption: `Auto clip: ${baseCleanName} — edit caption sebelum upload`,
-          hook_text: `Auto hook: ${baseCleanName}`,
-          body_text: 'Caption auto — ganti dengan hook 3 detik sesuai riset (y=80, 5-12 kata).',
-          hashtags: ['#fyp', '#tiktoktips'],
-          hashtags_str: '#fyp #tiktoktips'
+          full_caption: cap1,
+          hook_text: (llmC1?.hook_text || baseCleanName),
+          body_text: cap1,
+          hashtags: hash1,
+          hashtags_str: hash1.join(' ')
         },
         [clip2Filename]: {
-          full_caption: `Auto clip 2: ${baseCleanName} — SEO caption perlu diisi manual`,
-          hook_text: `Auto hook 2: ${baseCleanName}`,
-          body_text: 'Caption auto — isi keyword SEO 50 char pertama sebelum posting.',
-          hashtags: ['#edukasi', '#cuan'],
-          hashtags_str: '#edukasi #cuan'
+          full_caption: cap2,
+          hook_text: (llmC2?.hook_text || baseCleanName),
+          body_text: cap2,
+          hashtags: hash2,
+          hashtags_str: hash2.join(' ')
         }
       },
       seamless_loop: {
