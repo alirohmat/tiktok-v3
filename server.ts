@@ -102,18 +102,34 @@ function getCtaTarget(entities:any, pinned:string):'keranjang_kuning'|'link_bio'
   if(low.includes('link')||low.includes('bio')) return 'link_bio';
   return 'follow';
 }
+function extractEntitiesFromText(txt:string, cap=8){
+  const lower=txt.toLowerCase();
+  const people:string[]=[]; const peopleRe=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g; let m:RegExpExecArray|null; while((m=peopleRe.exec(txt))&&people.length<cap){ const v=m[1].trim(); if(v.length>=5&&v.length<=40&&!/^(Video|Channel|TikTok|YouTube|Save|Share)/i.test(v)) people.push(v); }
+  const brands=Array.from(new Set((txt.match(/\b(?:Samsung|iPhone|Apple|Xiaomi|Oppo|Vivo|Wardah|Skintific|Somethinc|Scarlett|Emina|Azarine|Implora|Hanasui|Garnier|L'Oreal|Nivea|Vaseline|Erha|Avoskin|Whitelab|Shopee|Tokopedia|Lazada|TikTok Shop|Grab|Gojek|BCA|BRI|BNI|Mandiri|Dana|OVO|Gopay|Indomie|Mixue|JCO|Starbucks|McD|KFC|Uniqlo|Zara|H&M|Nike|Adidas|Honda|Yamaha|Toyota|Mitsubishi|Tesla|BYD|Wuling|GadgetIn|Z Fold|Galaxy)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
+  const products=Array.from(new Set((txt.match(/\b(?:serum|moisturizer|sunscreen|toner|cream|lotion|lipstik|foundation|cushion|skincare|parfum|handphone|hp|iphone|samsung|laptop|ayam|bakso|sate|rendang|kopi|sambal|cumi|teri|obat|suplemen|vitamin|diet|jerawat|flek|whitening|acne|glowing|Z Fold|Galaxy|Foldable|smartphone)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
+  const places=Array.from(new Set((txt.match(/\b(?:Jakarta|Surabaya|Bandung|Blora|Tuban|Lasem|Bali|Jogja|Semarang|Medan|Indonesia|Jawa|Korea|Jepang|USA|Amerika|China|Thailand)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
+  const numbers=Array.from(new Set((txt.match(/\b\d+(?:[.,]\d+)?\s*(?:%|juta|miliar|ribu|kg|gram|ml|cm|tahun|bulan|hari|kali|x|rupiah|rp|dollar|\$|jt|m|k)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
+  const pain_points=Array.from(new Set((lower.match(/\b(?:jerawat|flek hitam|kusam|berminyak|kering|iritasi|breakout|pori-pori|ketombe|rontok|bau badan|overthinking|insomnia|stress|cemas|utang|bangkrut|rugi|gagal|ditipu|penipuan|scam|nyeri|sakit|pegal|lambung|maag|diet gagal|berat badan|gemuk|kurus)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
+  const topics=Array.from(new Set((lower.match(/\b(?:keuangan|investasi|saham|crypto|trading|affiliate|jualan|bisnis|kuliner|resep|masak|skincare|kecantikan|makeup|kesehatan|diet|olahraga|teknologi|gadget|review|unboxing|tutorial|viral|fyp|edukasi|motivasi|cerita|misteri|sejarah)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
+  const claims:string[]=[]; const claimRe=/(?:klaim|terbukti|hasil|efek|manfaat|bisa|dapat|mampu)[^.!?]{10,80}[.!?]/gi; let cm:RegExpExecArray|null; while((cm=claimRe.exec(txt))&&claims.length<5){ claims.push(cm[0].trim().slice(0,120)); }
+  return { people, brands, products, places, numbers, topics, pain_points, claims };
+}
+function mergeEntities(a:any,b:any, cap=8){
+  const dedup=(arr:string[])=>Array.from(new Map(arr.map(x=>[(x.toLowerCase()),x])).values()).slice(0,cap);
+  return {
+    people: dedup([...(a.people||[]), ...(b.people||[])]),
+    brands: dedup([...(a.brands||[]), ...(b.brands||[])]),
+    products: dedup([...(a.products||[]), ...(b.products||[])]),
+    places: dedup([...(a.places||[]), ...(b.places||[])]),
+    numbers: dedup([...(a.numbers||[]), ...(b.numbers||[])]),
+    topics: dedup([...(a.topics||[]), ...(b.topics||[])]),
+    pain_points: dedup([...(a.pain_points||[]), ...(b.pain_points||[])]),
+    claims: dedup([...(a.claims||[]), ...(b.claims||[])]),
+  };
+}
 function extractContextEntities(sourceMeta:any, transcript:string|null){
   const txt=[sourceMeta?.title||'', sourceMeta?.description||'', (sourceMeta?.tags||[]).join(' '), transcript||''].join(' ').slice(0,6000);
-  const lower=txt.toLowerCase();
-  const people:string[]=[]; const peopleRe=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g; let m:RegExpExecArray|null; while((m=peopleRe.exec(txt))&&people.length<8){ const v=m[1].trim(); if(v.length>=5&&v.length<=40&&!/^(Video|Channel|TikTok|YouTube|Save|Share)/i.test(v)) people.push(v); }
-  const brands=Array.from(new Set((txt.match(/\b(?:Samsung|iPhone|Apple|Xiaomi|Oppo|Vivo|Wardah|Skintific|Somethinc|Scarlett|Emina|Azarine|Implora|Hanasui|Garnier|L'Oreal|Nivea|Vaseline|Erha|Avoskin|Whitelab|Shopee|Tokopedia|Lazada|TikTok Shop|Grab|Gojek|BCA|BRI|BNI|Mandiri|Dana|OVO|Gopay|Indomie|Mixue|JCO|Starbucks|McD|KFC|Uniqlo|Zara|H&M|Nike|Adidas|Honda|Yamaha|Toyota|Mitsubishi|Tesla|BYD|Wuling)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
-  const products=Array.from(new Set((txt.match(/\b(?:serum|moisturizer|sunscreen|toner|cream|lotion|lipstik|foundation|cushion|skincare|parfum|handphone|hp|iphone|samsung|laptop|ayam|bakso|sate|rendang|kopi|sambal|cumi|teri|obat|suplemen|vitamin|diet|jerawat|flek|whitening|acne|glowing)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
-  const places=Array.from(new Set((txt.match(/\b(?:Jakarta|Surabaya|Bandung|Blora|Tuban|Lasem|Bali|Jogja|Semarang|Medan|Indonesia|Jawa|Korea|Jepang|USA|Amerika|China|Thailand)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
-  const numbers=Array.from(new Set((txt.match(/\b\d+(?:[.,]\d+)?\s*(?:%|juta|miliar|ribu|kg|gram|ml|cm|tahun|bulan|hari|kali|x|rupiah|rp|dollar|\$|jt|m|k)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
-  const pain_points=Array.from(new Set((lower.match(/\b(?:jerawat|flek hitam|kusam|berminyak|kering|iritasi|breakout|pori-pori|ketombe|rontok|bau badan|overthinking|insomnia|stress|cemas|utang|bangkrut|rugi|gagal|ditipu|penipuan|scam|nyeri|sakit|pegal|lambung|maag|diet gagal|berat badan|gemuk|kurus)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
-  const topics=Array.from(new Set((lower.match(/\b(?:keuangan|investasi|saham|crypto|trading|affiliate|jualan|bisnis|kuliner|resep|masak|skincare|kecantikan|makeup|kesehatan|diet|olahraga|teknologi|gadget|review|unboxing|tutorial|viral|fyp|edukasi|motivasi|cerita|misteri|sejarah)\b/gi)||[]).map(x=>x.trim()))).slice(0,8);
-  const claims:string[]=[]; const claimRe=/(?:klaim|terbukti|hasil|efek|manfaat|bisa|dapat|mampu)[^.!?]{10,80}[.!?]/gi; let cm:RegExpExecArray|null; while((cm=claimRe.exec(txt))&&claims.length<5){ claims.push(cm[0].trim().slice(0,120)); }
-  return { people:Array.from(new Set(people)).slice(0,5), brands, products, places, numbers, topics, pain_points, claims };
+  return extractEntitiesFromText(txt, 8);
 }
 async function searchBraveContext(query:string, entity_type:string, timeoutMs=5000):Promise<{query:string,entity_type:string,title:string,snippet:string,url:string}|null>{
   const key=(process.env.BRAVE_SEARCH_API_KEY||process.env.BRAVE_API_KEY||'').trim();
@@ -142,18 +158,36 @@ async function buildContextPackage(sourceName:string, transcript:string|null):Pr
   let source_meta:any=null; let url:string|null=lookupYtdlpUrlByFilename(sourceName);
   if(url){ console.log(`[Context] Found URL for ${sourceName}: ${url.slice(0,80)}`); source_meta=await extractYtdlpMetadata(url); }
   if(!source_meta){ console.log(`[Context] No URL for ${sourceName}, using filename as title`); source_meta={ title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' }; }
-  const entities=extractContextEntities(source_meta, transcript);
+  // base entities from local metadata+transcript
+  const baseEntities=extractContextEntities(source_meta, transcript);
   const braveKey=(process.env.BRAVE_SEARCH_API_KEY||process.env.BRAVE_API_KEY||'').trim();
-  if(!braveKey||braveKey.includes('your_')){ console.warn('[Brave] skipped: no BRAVE_SEARCH_API_KEY'); return { source_meta, entities, external_context:[] }; }
+  if(!braveKey||braveKey.includes('your_')){ console.warn('[Brave] skipped: no BRAVE_SEARCH_API_KEY'); return { source_meta, entities: baseEntities, external_context:[] }; }
+  // 1. SEED: HANYA source_meta (Title/Channel/Tags) — pancingan awal
+  const seedEntities=extractContextEntities(source_meta, null);
+  const seedForQuery=(seedEntities.brands.length||seedEntities.topics.length||seedEntities.people.length) ? seedEntities : baseEntities;
   const queries:{q:string,t:string}[]=[];
-  if(entities.brands[0]||entities.products[0]) queries.push({q:(entities.brands[0]||entities.products[0])+(entities.topics[0]?' '+entities.topics[0]:''), t:'brand/product'});
-  if(entities.people[0]) queries.push({q:entities.people[0], t:'people'});
-  if(entities.pain_points[0]) queries.push({q:entities.pain_points[0]+(entities.topics[0]?' '+entities.topics[0]:''), t:'pain_point'});
-  if(entities.topics[0]) queries.push({q:entities.topics[0]+' trending Indonesia 2024', t:'trend'});
-  if(entities.numbers[0]||entities.claims[0]) queries.push({q:(entities.numbers[0]||entities.claims[0]||'').slice(0,60), t:'claim'});
+  if(seedForQuery.brands[0]||seedForQuery.products[0]) queries.push({q:(seedForQuery.brands[0]||seedForQuery.products[0])+(seedForQuery.topics[0]?' '+seedForQuery.topics[0]:''), t:'brand/product'});
+  if(seedForQuery.people[0]) queries.push({q:seedForQuery.people[0], t:'people'});
+  if(seedForQuery.topics[0]) queries.push({q:seedForQuery.topics[0]+' trending Indonesia 2024', t:'trend'});
+  if(seedForQuery.pain_points[0]) queries.push({q:seedForQuery.pain_points[0]+(seedForQuery.topics[0]?' '+seedForQuery.topics[0]:''), t:'pain_point'});
+  // fallback: jika seed kosong, pakai title+channel langsung
+  if(!queries.length && source_meta.title) queries.push({q: source_meta.title.slice(0,60)+(source_meta.channel?' '+source_meta.channel:''), t:'seed_title'});
   const uniq=Array.from(new Map(queries.map(x=>[x.q,x])).values()).slice(0,3);
-  const results=await Promise.all(uniq.map(x=>searchBraveContext(x.q,x.t,5000)));
-  const external_context=results.filter(Boolean) as any[];
+  let external_context:any[]=[];
+  try{
+    const results=await Promise.all(uniq.map(x=>searchBraveContext(x.q,x.t,5000)));
+    external_context=results.filter(Boolean) as any[];
+  }catch(e:any){ console.warn('[Brave] expansion error', e?.message); external_context=[]; }
+  // 3. BRAVE-ENHANCED NLP: extract dari title+snippet Brave
+  let entities=baseEntities;
+  if(external_context.length){
+    const braveTxt=external_context.map((c:any)=>`${c.title||''} ${c.snippet||''}`).join(' ').slice(0,6000);
+    try{
+      const braveEntities=extractEntitiesFromText(braveTxt, 8);
+      entities=mergeEntities(baseEntities, braveEntities);
+      console.log(`[NLP] expansion merged: brands ${baseEntities.brands.length}->${entities.brands.length} products ${baseEntities.products.length}->${entities.products.length} people ${baseEntities.people.length}->${entities.people.length}`);
+    }catch(e:any){ console.warn('[NLP] expansion parse error', e?.message); }
+  }
   return { source_meta, entities, external_context };
 }
 function buildPostingSchedule(tier:'low'|'medium'|'high'){ const isHigh=tier==='high', isMed=tier==='medium'; const slots=[ {slot:'Pagi Hari (06:30 - 08:30 WIB)',time_range:'06:30 - 08:30 WIB',category:'Morning Commute & Breakfast (WIB)',traffic:isHigh?'Sangat Tinggi' as const:'Tinggi' as const,description:isHigh?'Golden pagi niche high — prioritas upload pagi':'Cocok untuk edukasi ringkas pagi',is_golden:isHigh}, {slot:'Siang Hari (11:45 - 13:15 WIB)',time_range:'11:45 - 13:15 WIB',category:'Lunch Break & Relax',traffic:'Tinggi' as const,description:'Traffic siang stabil',is_golden:false}, {slot:'Sore Hari (16:30 - 18:00 WIB)',time_range:'16:30 - 18:00 WIB',category:'Teatime & Heading Home',traffic:'Sedang' as const,description:'Pemanasan algoritma sore',is_golden:false}, {slot:'Malam Hari (19:00 - 21:00 WIB)',time_range:'19:00 - 21:00 WIB',category:'Golden Prime Time WIB',traffic:'Sangat Tinggi' as const,description:isHigh?'Prime malam — slot kedua high tier':'Prime malam — slot utama low/medium',is_golden:true} ]; const best=isHigh?'06:30 - 08:30 WIB (Pagi Golden - niche high)': isMed?'19:00 - 21:00 WIB (Prime Time - niche medium)':'19:00 - 21:00 WIB (Prime Time - niche low, slot lebih akhir)'; const advice=isHigh?'Upload 06:30 WIB (utama) + 19:00 WIB (kedua) — high tier prioritas pagi':'Upload 19:00 WIB — niche '+tier; return {timezone:'Asia/Jakarta (WIB)',slots,best_slot_today:best,advice}; }
@@ -787,7 +821,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       narrativeMetrics = computeNarrativeMetrics(transcript, lastWhisperSegments, d);
     }catch(e:any){ console.warn('[Narrative]',e?.message); narrativeMetrics = computeNarrativeMetrics(transcript, null, probeDurForNarrative); }
     const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%');
-const wrapHook=(s:string,maxPerLine=28)=>{ const w=s.trim().slice(0,85); if(w.length<=maxPerLine) return w; let cut=w.lastIndexOf(' ',maxPerLine); if(cut<12) cut=maxPerLine; const l1=w.slice(0,cut).trim(), l2=w.slice(cut).trim().slice(0,34); return l2?`${l1}\n${l2}`:l1; };
+const wrapHook=(s:string,maxPerLine=22)=>{ const w=s.trim().slice(0,85); if(w.length<=maxPerLine) return w; let cut=w.lastIndexOf(' ',maxPerLine); if(cut<12) cut=maxPerLine; const l1=w.slice(0,cut).trim(), l2=w.slice(cut).trim().slice(0,26); return l2?`${l1}\n${l2}`:l1; };
 const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     const llmC1=llmData?.clips?.[0]||null, llmC2=llmData?.clips?.[1]||llmC1;
     const hook1=escWrap(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
@@ -839,7 +873,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     const loopVideoFade2 = loopFadeSec2>0 && loop2.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec2.toFixed(3)}:alpha=1,fade=t=out:st=${(clip2Dur-loopFadeSec2).toFixed(3)}:d=${loopFadeSec2.toFixed(3)}:alpha=1` : ``;
     // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
     const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -849,7 +883,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -858,7 +892,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     ].join(';');
     // ponytail: clip2 distinct hook/seo/cta for sync
     const filterComplex2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -868,7 +902,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
