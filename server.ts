@@ -147,7 +147,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 function extractEntitiesFromText(txt:string, cap=8){
   const lower=txt.toLowerCase();
-  const people:string[]=[]; const peopleRe=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g; let m:RegExpExecArray|null; while((m=peopleRe.exec(txt))&&people.length<cap){ const v=m[1].trim(); if(v.length>=5&&v.length<=40&&!/^(Video|Channel|TikTok|YouTube|Save|Share)/i.test(v)) people.push(v); }
+  const PEOPLE_BLACKLIST = new Set(['bisa itu','nah tapi','oke ini','ate aku','baby udon saya','ya kan','gitu loh','kok bisa','masa sih','eh tunggu','curhat bang','bisa ada','bisa diakses','iya pas','nah tapi','bisa itu']);
+  const people:string[]=[]; const peopleRe=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g; let m:RegExpExecArray|null; while((m=peopleRe.exec(txt))&&people.length<cap){ const v=m[1].trim(); const vl=v.toLowerCase(); if(v.length>=5&&v.length<=40&&!/^(Video|Channel|TikTok|YouTube|Save|Share)/i.test(v) && v.split(' ').length>=2 && !PEOPLE_BLACKLIST.has(vl)) people.push(v); }
   const brands=Array.from(new Set((txt.match(/\b(?:Samsung|iPhone|Apple|Xiaomi|Oppo|Vivo|Wardah|Skintific|Somethinc|Scarlett|Emina|Azarine|Implora|Hanasui|Garnier|L'Oreal|Nivea|Vaseline|Erha|Avoskin|Whitelab|Shopee|Tokopedia|Lazada|TikTok Shop|Grab|Gojek|BCA|BRI|BNI|Mandiri|Dana|OVO|Gopay|Indomie|Mixue|JCO|Starbucks|McD|KFC|Uniqlo|Zara|H&M|Nike|Adidas|Honda|Yamaha|Toyota|Mitsubishi|Tesla|BYD|Wuling|GadgetIn|Z Fold|Galaxy)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
   const products=Array.from(new Set((txt.match(/\b(?:serum|moisturizer|sunscreen|toner|cream|lotion|lipstik|foundation|cushion|skincare|parfum|handphone|hp|iphone|samsung|laptop|ayam|bakso|sate|rendang|kopi|sambal|cumi|teri|obat|suplemen|vitamin|diet|jerawat|flek|whitening|acne|glowing|Z Fold|Galaxy|Foldable|smartphone)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
   const places=Array.from(new Set((txt.match(/\b(?:Jakarta|Surabaya|Bandung|Blora|Tuban|Lasem|Bali|Jogja|Semarang|Medan|Indonesia|Jawa|Korea|Jepang|USA|Amerika|China|Thailand)\b/gi)||[]).map(x=>x.trim()))).slice(0,cap);
@@ -200,7 +201,7 @@ async function extractYtdlpMetadata(url:string):Promise<any|null>{
 async function buildContextPackage(sourceName:string, transcript:string|null):Promise<{source_meta:any, entities:any, external_context:any[]}>{
   let source_meta:any=null; let url:string|null=lookupYtdlpUrlByFilename(sourceName);
   if(url){ console.log(`[Context] Found URL for ${sourceName}: ${url.slice(0,80)}`); source_meta=await extractYtdlpMetadata(url); }
-  if(!source_meta){ console.log(`[Context] No URL for ${sourceName}, using filename as title`); source_meta={ title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' }; }
+  if(!source_meta){ const cleaned=sourceName.replace(/[_-]/g,' ').replace(/\.mp4$/i,'').slice(0,200); console.log(`[Source] Using filename as title: ${cleaned}`); console.log(`[Context] No URL for ${sourceName}, using filename as title`); source_meta={ title:cleaned, description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' }; }
   // base entities from local metadata+transcript
   const baseEntities=extractContextEntities(source_meta, transcript);
   const braveKey=(process.env.BRAVE_SEARCH_API_KEY||process.env.BRAVE_API_KEY||'').trim();
@@ -243,8 +244,9 @@ async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<s
   const tmpWav=tmpMp3;
   try{
     const durFlag=isLong?'-t 120 ':'';
-    await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 32k -c:a libmp3lame ${durFlag}"${tmpMp3}"`);
+    await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 64k -c:a libmp3lame ${durFlag}"${tmpMp3}"`);
     if(!fs.existsSync(tmpWav)||fs.statSync(tmpWav).size<1000) return null;
+    console.log(`[Whisper] tmp.mp3 ${(fs.statSync(tmpWav).size/1024/1024).toFixed(1)}MB ${fs.statSync(tmpWav).size} bytes durFlag=${durFlag||'FULL'} isLong=${isLong}`);
     // Guard Groq 25MB limit: 32k mono 90m=21MB OK, 120m=28MB OVER -> auto downsample 24k if needed
     if(fs.statSync(tmpWav).size>25*1024*1024 && !isLong){
       console.warn(`[GroqWhisper] MP3 ${ (fs.statSync(tmpWav).size/1024/1024).toFixed(1)}MB >25MB, re-encode 24k mono`);
@@ -257,7 +259,7 @@ async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<s
     }
     const buf=fs.readFileSync(tmpWav); const fd=new FormData();
     fd.append('file', new Blob([buf],{type:'audio/mpeg'}), 'audio.mp3');
-    fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3-turbo');
+    fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3');
     fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
     for(let attempt=0; attempt<3; attempt++){
       try{
@@ -272,7 +274,7 @@ async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<s
         }
         try{fs.unlinkSync(tmpWav);}catch{}
         if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); lastWhisperSegments=null; return null;}
-        const j:any=await r.json(); if(Array.isArray((j as any).segments)) lastWhisperSegments=(j as any).segments; else lastWhisperSegments=null; const txt=((j as any).text||'').trim().slice(0,4000)||null; if(probeDur>7200&&txt) transcriptPartialFlag=true; return txt;
+        const j:any=await r.json(); if(Array.isArray((j as any).segments)) lastWhisperSegments=(j as any).segments; else lastWhisperSegments=null; const _rawTxt=((j as any).text||'').trim(); console.log(`[Whisper] response text ${_rawTxt.length} chars segments=${(lastWhisperSegments||[]).length}`); if(_rawTxt.length<500 && probeDur>600) console.warn(`[Whisper] truncated warning: ${_rawTxt.length} chars for ${probeDur.toFixed(0)}s video`); const txt=_rawTxt.slice(0,12000)||null; if(probeDur>7200&&txt) transcriptPartialFlag=true; return txt;
       }catch(e:any){
         const msg=String(e?.message||e);
         if(msg.includes('429')||msg.toLowerCase().includes('rate limit')){
@@ -944,7 +946,10 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       const hookL2 = esc(hookParts[1]||'');
       const seo = esc(clip?.seo_keyword||slugify(baseCleanName)+'-viral');
       const cta = esc(clip?.cta_text|| (idx===0 ? 'Save & Share ->' : `Part ${idx+1} ->`));
-      // Whisper CC ASS per clip (center karaoke)
+      const cStart = Math.max(0, Number(clip?.start_time)||0);
+      const cEnd = Math.max(cStart+5, Number(clip?.end_time)||cStart+30);
+      const cDur = Math.min(45, cEnd-cStart);
+      // Whisper CC ASS per clip (center karaoke) — MUST be after cStart/cEnd defined
       let assFilter='';
       try{
         const segs:any[] = Array.isArray(lastWhisperSegments)?lastWhisperSegments:[];
@@ -953,14 +958,14 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
           const assPath = path.join(cacheDir, `cc_${jobId}_${idx+1}.ass`);
           try{ fs.mkdirSync(cacheDir,{recursive:true}); }catch{}
           fs.writeFileSync(assPath, assContent, 'utf8');
-          // escape for filter: colon and single quote
+          const szFs = fs.statSync(assPath).size;
+          console.log(`[CC] Generated ${assPath} (${szFs} bytes) for clip ${idx+1}`);
           const escAss = assPath.replace(/:/g,'\\:').replace(/'/g,"\\'");
           assFilter = `,ass='${escAss}'`;
+        } else {
+          console.warn(`[CC] No segments for clip ${idx+1}, skipping ASS`);
         }
       }catch(e:any){ console.warn('[CC]',String(e?.message||e).slice(0,80)); }
-      const cStart = Math.max(0, Number(clip?.start_time)||0);
-      const cEnd = Math.max(cStart+5, Number(clip?.end_time)||cStart+30);
-      const cDur = Math.min(45, cEnd-cStart);
       const filename = `clip_${idx+1}_${baseCleanName}_${slugify(clip?.seo_keyword||'viral')}.mp4`;
       const outPath = path.join(rendersDir, filename);
       const loopFadeSec = loopNorm.crossfade_ms>0 ? Math.min(loopNorm.crossfade_ms/1000, Math.max(0, cDur-0.5)) : 0;
