@@ -9,7 +9,7 @@ import { createServer as createViteServer } from 'vite';
 
 const execAsync = promisify(exec);
 
-const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata.`;
+const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk.`;
 function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
 function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
@@ -22,6 +22,53 @@ function enrichAndSortClips(raw:any[]):any[]{
   const enriched=raw.map((c,i)=>{ const vs=normalizeViralityScore(c?.virality_score); const b=getViralityBadge(vs); return {...c, virality_score:vs, virality_badge:b.badge, virality_label:b.label, virality_emoji:b.emoji, _orig_idx:i}; });
   enriched.sort((a,b)=> b.virality_score - a.virality_score || a._orig_idx - b._orig_idx);
   return enriched.map((c,i)=>{ const { _orig_idx, ...rest }=c; return {...rest, is_primary:i===0}; });
+}
+function buildFallbackComments(entities:any):{text:string,intent:'skeptic'|'curious'|'relatable'}[]{
+  const prod=(entities?.products?.[0]||entities?.brands?.[0]||'').trim();
+  return [
+    {text: prod?`Ah masa sih ${prod} sebagus itu? Di gue kok gak ngaruh ya?`:`Ah masa sih sebagus itu? Kok di gue gak ngaruh ya?`, intent:'skeptic' as const},
+    {text: prod?`Itu ${prod} varian lama atau baru bang? Ngaruh gak ke hasilnya?`:`Itu varian lama atau baru bang? Ada yang udah coba?`, intent:'curious' as const},
+    {text:`Sumpah gue juga ngalamin hal yang sama persis, relate banget!`, intent:'relatable' as const},
+  ];
+}
+function normalizeComments(raw:any, entities:any):{text:string,intent:'skeptic'|'curious'|'relatable'}[]{
+  const allowed=new Set(['skeptic','curious','relatable']);
+  let arr:Array<any>=Array.isArray(raw)?raw:[];
+  let out:{text:string,intent:'skeptic'|'curious'|'relatable'}[]=[];
+  for(const c of arr){
+    if(out.length>=5) break;
+    let text=typeof c==='string'?c:(c?.text||'');
+    let intent=String(c?.intent||'').toLowerCase().trim();
+    text=String(text).trim().slice(0,140);
+    if(!text||text.length<8) continue;
+    const low=text.toLowerCase();
+    if(/\b(mantap bang|ijin sedot|ijin save)\b/.test(low)||low==='keren'||low==='mantap bang') continue;
+    if(/\b(sara|rasis)\b/.test(low)) continue;
+    if(!allowed.has(intent)) intent=['skeptic','curious','relatable'][out.length%3];
+    out.push({text,intent:intent as any});
+  }
+  if(out.length<3){
+    const fb=buildFallbackComments(entities);
+    for(const f of fb){ if(out.length>=3) break; if(!out.some(o=>o.intent===f.intent)) out.push(f); }
+    while(out.length<3) out.push(fb[out.length%fb.length]);
+  }
+  const uniq=new Set(out.map(o=>o.intent));
+  if(uniq.size===1 && out.length>=3){ out[1].intent='curious' as const; out[2].intent='relatable' as const; }
+  return out.slice(0,5);
+}
+function normalizePinnedReply(raw:any, entities:any):string{
+  let s=typeof raw==='string'?raw.trim():String(raw||'').trim();
+  if(s) return s.slice(0,220);
+  const prod=(entities?.products?.[0]||entities?.brands?.[0]||'').trim();
+  if(prod) return `Yang mau coba ${prod} yang aku bahas, cek keranjang kuning no. 3 ya, mumpung lagi diskon! \uD83D\uDC47`;
+  return `Buat yang mau dengar cerita lengkapnya, cek playlist di profil / part 2 besok ya!`;
+}
+function getCtaTarget(entities:any, pinned:string):'keranjang_kuning'|'link_bio'|'follow'{
+  if((entities?.products?.length||0)>0 || (entities?.brands?.length||0)>0) return 'keranjang_kuning';
+  const low=(pinned||'').toLowerCase();
+  if(low.includes('keranjang')) return 'keranjang_kuning';
+  if(low.includes('link')||low.includes('bio')) return 'link_bio';
+  return 'follow';
 }
 function extractContextEntities(sourceMeta:any, transcript:string|null){
   const txt=[sourceMeta?.title||'', sourceMeta?.description||'', (sourceMeta?.tags||[]).join(' '), transcript||''].join(' ').slice(0,6000);
@@ -295,7 +342,9 @@ interface JobMeta {
     niche_profit_tier: string;
     niche_score: number | null;
     niche_advisory: string;
-    comments: string[];
+    comments: {text:string,intent:'skeptic'|'curious'|'relatable'}[];
+    pinned_reply: string;
+    cta_target: 'keranjang_kuning'|'link_bio'|'follow';
     top_virality_score?: number;
     top_virality_badge?: string;
   };
@@ -920,7 +969,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
         }
       },
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
-      engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:[], ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
+      engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; const ents=(contextPackage as any)?.entities || {people:[],brands:[],products:[],places:[],numbers:[],topics:[],pain_points:[],claims:[]}; const normComments=normalizeComments((llmData as any)?.comments, ents); const pin=normalizePinnedReply((llmData as any)?.pinned_reply, ents); const cta=getCtaTarget(ents, pin); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:normComments, pinned_reply:pin, cta_target:cta, ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
       clips: Array.isArray((llmData as any)?.clips) ? (llmData as any).clips.map((c:any)=>({ start_time:Number(c.start_time)||0, end_time:Number(c.end_time)||0, hook_text:String(c.hook_text||'').slice(0,120), seo_keyword:String(c.seo_keyword||'').slice(0,60), caption:String(c.caption||'').slice(0,500), hashtags:Array.isArray(c.hashtags)?c.hashtags.slice(0,8):[], cta_text:String(c.cta_text||'').slice(0,80), virality_score:normalizeViralityScore(c.virality_score), virality_badge:getViralityBadge(normalizeViralityScore(c.virality_score)).badge, virality_label:getViralityBadge(normalizeViralityScore(c.virality_score)).label, virality_emoji:getViralityBadge(normalizeViralityScore(c.virality_score)).emoji, is_primary:!!c.is_primary })) : [],
       source_meta: contextPackage?.source_meta || { title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' },
       entities: contextPackage?.entities || { people:[], brands:[], products:[], places:[], numbers:[], topics:[], pain_points:[], claims:[] },
