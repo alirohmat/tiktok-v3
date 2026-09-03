@@ -15,6 +15,14 @@ function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
 function normalizeNicheTier(v:any): 'low'|'medium'|'high' { const s=String(v??'').toLowerCase().trim(); if(s==='high'||s==='tinggi'||s.includes('8-15')||s.includes('15%')||s==='high-profit'||s==='premium') return 'high'; if(s==='medium'||s==='mid'||s==='sedang'||s.includes('4-8')||s.includes('medium')) return 'medium'; if(s==='low'||s==='rendah') return 'low'; if(s.includes('high')) return 'high'; if(s.includes('medium')||s.includes('mid')) return 'medium'; return 'low'; }
 function normalizeNiche(raw:any){ const tag=(typeof raw?.tag==='string'&&raw.tag.trim())?raw.tag.trim().toLowerCase().slice(0,32): (typeof raw?.niche_tag==='string'&&raw.niche_tag.trim()?raw.niche_tag.trim().toLowerCase().slice(0,32):'unknown'); const tier=normalizeNicheTier(raw?.tier??raw?.niche_profit_tier); let sc=Number(raw?.score??raw?.niche_score); if(!Number.isFinite(sc)) sc=0; sc=Math.round(Math.max(0,Math.min(100,sc))); const llmAdv=(typeof raw?.advisory==='string'&&raw.advisory.trim())?raw.advisory.trim().slice(0,200): (typeof raw?.niche_advisory==='string'&&raw.niche_advisory.trim()?raw.niche_advisory.trim().slice(0,200):''); const tierAdvice=tier==='high'?'High profit niche': tier==='medium'?'Medium niche':'Low niche — cek riset'; const bestSlot=tier==='high'?'06:30 & 19:00 WIB': tier==='medium'?'19:00 WIB':'19:30 WIB'; const adv=llmAdv ? (llmAdv.toLowerCase().includes(tag) ? llmAdv : `${tag} — ${llmAdv}`) : `${tag} — ${tierAdvice} — upload ${bestSlot}`; return {tag,tier,score:sc,advisory:adv}; }
+function normalizeViralityScore(v:any): number { const n=Number(v); if(!Number.isFinite(n)){ console.warn('[Virality] missing/invalid score -> fallback 50, raw:',String(v).slice(0,80)); return 50; } return Math.round(Math.max(0,Math.min(100,n))); }
+function getViralityBadge(score:number){ if(score>=85) return {badge:'viral_potential' as const,label:'Potensi FYP',emoji:'\uD83D\uDD25'}; if(score>=60) return {badge:'solid' as const,label:'Konten Solid',emoji:'\u2705'}; return {badge:'experimental' as const,label:'Eksperimental',emoji:'\uD83E\uDDEA'}; }
+function enrichAndSortClips(raw:any[]):any[]{
+  if(!Array.isArray(raw)||!raw.length) return [];
+  const enriched=raw.map((c,i)=>{ const vs=normalizeViralityScore(c?.virality_score); const b=getViralityBadge(vs); return {...c, virality_score:vs, virality_badge:b.badge, virality_label:b.label, virality_emoji:b.emoji, _orig_idx:i}; });
+  enriched.sort((a,b)=> b.virality_score - a.virality_score || a._orig_idx - b._orig_idx);
+  return enriched.map((c,i)=>{ const { _orig_idx, ...rest }=c; return {...rest, is_primary:i===0}; });
+}
 function extractContextEntities(sourceMeta:any, transcript:string|null){
   const txt=[sourceMeta?.title||'', sourceMeta?.description||'', (sourceMeta?.tags||[]).join(' '), transcript||''].join(' ').slice(0,6000);
   const lower=txt.toLowerCase();
@@ -64,7 +72,7 @@ async function buildContextPackage(sourceName:string, transcript:string|null):Pr
   if(entities.pain_points[0]) queries.push({q:entities.pain_points[0]+(entities.topics[0]?' '+entities.topics[0]:''), t:'pain_point'});
   if(entities.topics[0]) queries.push({q:entities.topics[0]+' trending Indonesia 2024', t:'trend'});
   if(entities.numbers[0]||entities.claims[0]) queries.push({q:(entities.numbers[0]||entities.claims[0]||'').slice(0,60), t:'claim'});
-  const uniq=Array.from(new Map(queries.map(x=>[x.q,x])).values()).slice(0,5);
+  const uniq=Array.from(new Map(queries.map(x=>[x.q,x])).values()).slice(0,3);
   const results=await Promise.all(uniq.map(x=>searchBraveContext(x.q,x.t,5000)));
   const external_context=results.filter(Boolean) as any[];
   return { source_meta, entities, external_context };
@@ -288,7 +296,10 @@ interface JobMeta {
     niche_score: number | null;
     niche_advisory: string;
     comments: string[];
+    top_virality_score?: number;
+    top_virality_badge?: string;
   };
+  clips?: Array<{ start_time:number; end_time:number; hook_text:string; seo_keyword:string; caption:string; hashtags:string[]; cta_text:string; virality_score:number; virality_badge:string; virality_label:string; virality_emoji:string; is_primary:boolean }>;
   source_meta?: { title:string; description:string; channel:string; channel_id:string; upload_date:string; duration:number; view_count:number; like_count:number; categories:string[]; tags:string[]; extractor:string; url:string; };
   entities?: { people:string[]; brands:string[]; products:string[]; places:string[]; numbers:string[]; topics:string[]; pain_points:string[]; claims:string[]; };
   external_context?: { query:string; entity_type:string; title:string; snippet:string; url:string }[];
@@ -685,8 +696,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       try{ contextPackage=await buildContextPackage(sourceName, transcript); job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context OK: title="${(contextPackage.source_meta?.title||'').slice(0,40)}" entities=${(contextPackage.entities?.people?.length||0)}p/${(contextPackage.entities?.brands?.length||0)}b/${(contextPackage.entities?.pain_points?.length||0)}pp external=${contextPackage.external_context?.length||0}`); }catch(ce:any){ console.warn('[Context]',ce?.message); job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context skip: ${String(ce?.message||ce).slice(0,80)}`); }
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM: Muse/Groq caption/hashtag...`);
       llmData=await callMuseLLM(baseCleanName, dur, transcript, contextPackage);
-      if(llmData?.clips?.length) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) hook=${(llmData.clips[0]?.hook_text||'').slice(0,40)} seo=${llmData.clips[0]?.seo_keyword||''}`);
-      else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM skip/fallback — pakai caption auto jujur`);
+      if(llmData?.clips?.length){ llmData.clips=enrichAndSortClips(llmData.clips); const top=llmData.clips[0]; const b=getViralityBadge(top.virality_score); job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) sorted desc hook=${(top?.hook_text||'').slice(0,40)} virality=${top.virality_score} badge=${b.badge} seo=${top?.seo_keyword||''}`); } else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM skip/fallback — pakai caption auto jujur`);
     }catch(e:any){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM error: ${e?.message||e}`); }
     const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%').slice(0,70);
     const llmC1=llmData?.clips?.[0]||null, llmC2=llmData?.clips?.[1]||llmC1;
@@ -910,7 +920,8 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
         }
       },
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
-      engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:[]}; })(),
+      engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:[], ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
+      clips: Array.isArray((llmData as any)?.clips) ? (llmData as any).clips.map((c:any)=>({ start_time:Number(c.start_time)||0, end_time:Number(c.end_time)||0, hook_text:String(c.hook_text||'').slice(0,120), seo_keyword:String(c.seo_keyword||'').slice(0,60), caption:String(c.caption||'').slice(0,500), hashtags:Array.isArray(c.hashtags)?c.hashtags.slice(0,8):[], cta_text:String(c.cta_text||'').slice(0,80), virality_score:normalizeViralityScore(c.virality_score), virality_badge:getViralityBadge(normalizeViralityScore(c.virality_score)).badge, virality_label:getViralityBadge(normalizeViralityScore(c.virality_score)).label, virality_emoji:getViralityBadge(normalizeViralityScore(c.virality_score)).emoji, is_primary:!!c.is_primary })) : [],
       source_meta: contextPackage?.source_meta || { title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' },
       entities: contextPackage?.entities || { people:[], brands:[], products:[], places:[], numbers:[], topics:[], pain_points:[], claims:[] },
       external_context: contextPackage?.external_context || []
