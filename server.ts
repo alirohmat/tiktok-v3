@@ -198,14 +198,26 @@ function buildPostingSchedule(tier:'low'|'medium'|'high'){ const isHigh=tier==='
 async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<string|null>{
   const release=await acquireGroqLock();
   transcriptPartialFlag=false;
-  if(probeDur>7200) console.warn(`[GroqWhisper] Video exceeds Groq free tier hourly limit (${probeDur.toFixed(0)}s > 7200s). Using smart 120s first-chunk sampling to stay within quota.`);
-  const tmpWav=`/tmp/groq_${Date.now()}.wav`;
+  const isLong=probeDur>7200;
+  if(isLong) console.warn(`[GroqWhisper] Video exceeds Groq free tier hourly limit (${probeDur.toFixed(0)}s > 7200s). Using smart 120s first-chunk sampling to stay within quota.`);
+  const tmpMp3=`/tmp/groq_${Date.now()}.mp3`;
+  const tmpWav=tmpMp3;
   try{
-    // full 120s first chunk is intentional sampling - keeps every job under 120s quota
-    await execAsync(`ffmpeg -y -i "${inputPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -t 120 "${tmpWav}"`);
+    const durFlag=isLong?'-t 120 ':'';
+    await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 32k -c:a libmp3lame ${durFlag}"${tmpMp3}"`);
     if(!fs.existsSync(tmpWav)||fs.statSync(tmpWav).size<1000) return null;
+    // Guard Groq 25MB limit: 32k mono 90m=21MB OK, 120m=28MB OVER -> auto downsample 24k if needed
+    if(fs.statSync(tmpWav).size>25*1024*1024 && !isLong){
+      console.warn(`[GroqWhisper] MP3 ${ (fs.statSync(tmpWav).size/1024/1024).toFixed(1)}MB >25MB, re-encode 24k mono`);
+      await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 24k -c:a libmp3lame ${durFlag}"${tmpMp3}"`);
+      if(fs.statSync(tmpWav).size>25*1024*1024){
+        console.warn(`[GroqWhisper] still >25MB after 24k, fallback 120s partial`);
+        await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 32k -c:a libmp3lame -t 120 "${tmpMp3}"`);
+        transcriptPartialFlag=true;
+      }
+    }
     const buf=fs.readFileSync(tmpWav); const fd=new FormData();
-    fd.append('file', new Blob([buf],{type:'audio/wav'}), 'audio.wav');
+    fd.append('file', new Blob([buf],{type:'audio/mpeg'}), 'audio.mp3');
     fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3-turbo');
     fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
     for(let attempt=0; attempt<3; attempt++){
