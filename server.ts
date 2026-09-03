@@ -13,11 +13,28 @@ const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY
 function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
 function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
-async function callMuseLLM(baseName:string,dur:number):Promise<any|null>{
+async function transcribeWithGroq(inputPath:string):Promise<string|null>{
+  const k=(process.env.GROQ_API_KEY||'').trim(); if(!k||k.includes('your_')) return null;
+  const tmpWav=`/tmp/groq_${Date.now()}.wav`;
+  try{
+    await execAsync(`ffmpeg -y -i "${inputPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -t 120 "${tmpWav}"`);
+    if(!fs.existsSync(tmpWav)||fs.statSync(tmpWav).size<1000) return null;
+    const buf=fs.readFileSync(tmpWav); const fd=new FormData();
+    fd.append('file', new Blob([buf],{type:'audio/wav'}), 'audio.wav');
+    fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3-turbo');
+    fd.append('language','id'); fd.append('response_format','json');
+    const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k},body:fd as any});
+    try{fs.unlinkSync(tmpWav);}catch{}
+    if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); return null;}
+    const j:any=await r.json(); return (j.text||'').trim().slice(0,4000)||null;
+  }catch(e:any){console.warn('[GroqWhisper]',e?.message); try{fs.unlinkSync(tmpWav);}catch{} return null;}
+}
+async function callMuseLLM(baseName:string,dur:number,transcript:string|null):Promise<any|null>{
   const k=(process.env.MUSE_API_KEY||process.env.GROQ_API_KEY||'').trim(); const u=(process.env.MUSE_BASE_URL||'https://api.groq.com/openai/v1').trim(); const m=(process.env.MUSE_MODEL||'openai/gpt-oss-120b').trim();
   if(!k||k.includes('your_')){console.log('[LLM] skip placeholder'); return null;}
-  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s Buat 1-2 clip 30-60s hook 5-12 kata seo hyphen caption keyword first50 3-5 hashtag CTA Save/Share niche. Return JSON.`;
-  try{ const r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.4,response_format:{type:'json_object'}})}); if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
+  const tr=transcript?`TRANSCRIPT (wajib pakai untuk caption/hook/seo, JANGAN ngarang): """${transcript.slice(0,3000)}"""`:`Tanpa transcript (file testsrc), buat generic.`;
+  const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s ${tr} Buat 1-2 clip VIRAL: start_time & end_time HARUS sesuai momen paling retensi di transcript, 30-45s durasi, hook 5-12 kata dari transcript, seo_keyword hyphen dari topik transcript, caption keyword first 50 chars dari transcript, 3-5 hashtag dari transcript, CTA Save/Share. caption HARUS meringkas isi transcript, bukan generic. Return JSON.`;
+  try{ const r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.35,response_format:{type:'json_object'}})}); if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
 }
 
 const app = express();
@@ -585,20 +602,24 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     await ensureAudioAssets();
     const bgAudioPath = path.join(audioAssetsDir, selectedTheme.file);
 
-    // Phase 1: Analisis input + LLM brain (caption/hashtag/hook)
+    // Phase 1: Analisis input + transcript-sync (Groq Whisper → Muse caption)
     job.status = 'PROCESSING';
     job.phase = 'extract audio & probe';
     job.progress = 0.15;
-    job.detail = 'FFprobe + LLM caption/hashtag';
-    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 1/5: FFprobe + LLM brain (caption/hashtag/hook)`);
+    job.detail = 'Groq Whisper transcript → LLM';
+    job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 1/5: Transcript Groq Whisper → LLM brain`);
     broadcastSSE();
-    let llmData:any=null;
+    let llmData:any=null; let transcript:string|null=null;
     try{
       const {stdout}=await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
       const dur=parseFloat(stdout.trim())||30;
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM: panggil Muse/Groq untuk caption/hashtag...`);
-      llmData=await callMuseLLM(baseCleanName, dur);
-      if(llmData?.clips?.length) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) hook=${(llmData.clips[0]?.hook_text||'').slice(0,40)}`);
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper: transcribe ${dur.toFixed(1)}s...`);
+      transcript=await transcribeWithGroq(inputPath);
+      if(transcript) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper OK: ${(transcript.slice(0,60)).replace(/\n/g,' ')}...`);
+      else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper kosong/skip — LLM tanpa transcript`);
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM: Muse/Groq caption/hashtag...`);
+      llmData=await callMuseLLM(baseCleanName, dur, transcript);
+      if(llmData?.clips?.length) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) hook=${(llmData.clips[0]?.hook_text||'').slice(0,40)} seo=${llmData.clips[0]?.seo_keyword||''}`);
       else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM skip/fallback — pakai caption auto jujur`);
     }catch(e:any){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM error: ${e?.message||e}`); }
     const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%').slice(0,70);
@@ -609,6 +630,15 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const hook2=esc(llmC2?.hook_text||hook1);
     const seo2=esc(llmC2?.seo_keyword||seo1);
     const cta2=esc(llmC2?.cta_text||cta1);
+    // ponytail: clip timing from LLM transcript (start_time/end_time) → FFmpeg ss/t must match caption topic
+    const clip1Start=Math.max(0, Number(llmC1?.start_time)||0);
+    const clip1End=Math.max(clip1Start+5, Number(llmC1?.end_time)||clip1Start+30);
+    const clip1Dur=Math.min(45, clip1End-clip1Start);
+    const clip2StartRaw=Number(llmC2?.start_time); const clip2EndRaw=Number(llmC2?.end_time);
+    // ponytail: clip2 defaults to second half if LLM only gives 1 clip or same timing
+    let clip2Start=isFinite(clip2StartRaw)&&llmData?.clips?.length>1?Math.max(0,clip2StartRaw):Math.max(clip1End, 30);
+    let clip2Dur=isFinite(clip2EndRaw)&&isFinite(clip2StartRaw)?Math.min(45, clip2EndRaw-clip2StartRaw):30;
+    if(clip2Start===clip1Start && llmData?.clips?.length<=1) clip2Dur=30;
 
     // Phase 2: Pembersihan Filler Words & Dead-Air
     job.phase = 'clean fillers & silence';
@@ -650,10 +680,29 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       `[vocal]acopy[a_mix]`,
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
+    // ponytail: clip2 distinct hook/seo/cta for sync
+    const filterComplex2 = [
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      cleanFillersEnabled
+        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        : `[0:a]volume=1.2[vocal]`,
+      hasBg
+        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix]`
+        : `[vocal]acopy[a_mix]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+    ].join(';');
+    const filterComplexNoBg2 = [
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      cleanFillersEnabled
+        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        : `[0:a]volume=1.2[vocal]`,
+      `[vocal]acopy[a_mix]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+    ].join(';');
 
     const cmdClip1 = hasBg
-      ? `ffmpeg -y -ss 0 -t 30 -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`
-      : `ffmpeg -y -ss 0 -t 30 -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`;
+      ? `ffmpeg -y -ss ${clip1Start} -t ${clip1Dur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`
+      : `ffmpeg -y -ss ${clip1Start} -t ${clip1Dur} -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip1Path}"`;
 
     await execAsync(cmdClip1);
 
@@ -665,8 +714,8 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     broadcastSSE();
 
     const cmdClip2 = hasBg
-      ? `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex1}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
-      : `ffmpeg -y -ss 30 -t 30 -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
+      ? `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`
+      : `ffmpeg -y -ss ${clip2Start} -t ${clip2Dur} -i "${inputPath}" -filter_complex "${filterComplexNoBg2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
 
     let clip2Ok = false;
     try {
@@ -681,7 +730,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
         fbStart = dur > 15 ? 5 : 0;
         fbDur = Math.max(5, Math.min(25, dur - fbStart));
       } catch {}
-      const fallbackCmd = `ffmpeg -y -ss ${fbStart} -t ${fbDur} -i "${inputPath}" -filter_complex "${filterComplexNoBg}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
+      const fallbackCmd = `ffmpeg -y -ss ${fbStart} -t ${fbDur} -i "${inputPath}" -filter_complex "${filterComplexNoBg2}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outClip2Path}"`;
       await execAsync(fallbackCmd);
     }
 
