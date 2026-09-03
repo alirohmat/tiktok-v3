@@ -261,7 +261,8 @@ async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<s
     fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
     for(let attempt=0; attempt<3; attempt++){
       try{
-        const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k},body:fd as any});
+        const gk=(process.env.GROQ_API_KEY||'').trim();
+        const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+gk},body:fd as any});
         if(r.status===429){
           const body=(await r.text()).slice(0,300);
           console.warn(`[GroqWhisper] 429 rate limit hit attempt ${attempt+1}/3 - ${body}`);
