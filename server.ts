@@ -9,7 +9,7 @@ import { createServer as createViteServer } from 'vite';
 
 const execAsync = promisify(exec);
 
-const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk.`;
+const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk. SEAMLESS LOOP WAJIB return object seamless_loop {loop_score integer 0-100, bridge_phrase string kalimat penutup yang grammar memancing hook_text, loop_transition enum cut|fade|dissolve, crossfade_ms integer 200-500}. Konsep Syntactic Loop: bridge_phrase di akhir video harus nyambung sintaksis dengan hook_text di awal sehingga saat TikTok auto-loop kalimat jadi satu. Mis Hook uang 1,2 miliar bisa hilang dari TikTok! + Bridge Dan itulah alasan kenapa -> loop Dan itulah alasan kenapa uang 1,2 miliar bisa hilang dari TikTok! Lakukan analisis transcript untuk buat bridge_phrase paling mulus.`;
 function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
 function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
@@ -62,6 +62,14 @@ function normalizePinnedReply(raw:any, entities:any):string{
   const prod=(entities?.products?.[0]||entities?.brands?.[0]||'').trim();
   if(prod) return `Yang mau coba ${prod} yang aku bahas, cek keranjang kuning no. 3 ya, mumpung lagi diskon! \uD83D\uDC47`;
   return `Buat yang mau dengar cerita lengkapnya, cek playlist di profil / part 2 besok ya!`;
+}
+function normalizeSeamlessLoop(raw:any): {loop_score:number|null, bridge_phrase:string, loop_transition:string, crossfade_ms:number}{
+  if(!raw||typeof raw!=='object') return {loop_score:null, bridge_phrase:'', loop_transition:'cut', crossfade_ms:0};
+  let n=Number(raw.loop_score); let ls:number|null=(Number.isFinite(n)?Math.max(0,Math.min(100,Math.round(n))):null);
+  let bp=typeof raw.bridge_phrase==='string'?raw.bridge_phrase.trim().slice(0,160):''; 
+  let tr=String(raw.loop_transition||'cut').toLowerCase().trim(); if(!['cut','fade','dissolve'].includes(tr)) tr='cut';
+  let cf=Number(raw.crossfade_ms); if(!Number.isFinite(cf)) cf=tr==='cut'?0:300; cf=Math.round(Math.max(0,Math.min(500,cf))); if(tr==='cut') cf=0; if(cf>0&&cf<200) cf=200; if(ls===null&&tr==='cut') cf=0;
+  return {loop_score:ls, bridge_phrase:bp, loop_transition:tr, crossfade_ms:cf};
 }
 function getCtaTarget(entities:any, pinned:string):'keranjang_kuning'|'link_bio'|'follow'{
   if((entities?.products?.length||0)>0 || (entities?.brands?.length||0)>0) return 'keranjang_kuning';
@@ -786,43 +794,53 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     // 1. Video: 9:16 crop, 1080x1920 scale, drawtext watermark @brogalanblora
     // 2. Audio: Voice + Backsound mixing (amix/ducking) + 19kHz Ultrasonic tone anti-duplicate
     const hasBg = themeKey !== 'none' && fs.existsSync(bgAudioPath);
+    // P1-6 Seamless Loop: normalize LLM bridge
+    const seamlessRaw = (llmData as any)?.seamless_loop || null;
+    const loopNorm = normalizeSeamlessLoop(seamlessRaw);
+    const loop1 = loopNorm; const loop2 = loopNorm;
+    const loopFadeSec1 = loop1.crossfade_ms>0 ? Math.min(loop1.crossfade_ms/1000, Math.max(0, clip1Dur-0.5)) : 0;
+    const loopFadeSec2 = loop2.crossfade_ms>0 ? Math.min(loop2.crossfade_ms/1000, Math.max(0, clip2Dur-0.5)) : 0;
+    const loopAudioFade1 = loopFadeSec1>0 ? `afade=t=in:st=0:d=${loopFadeSec1.toFixed(3)},afade=t=out:st=${(clip1Dur-loopFadeSec1).toFixed(3)}:d=${loopFadeSec1.toFixed(3)}` : `afade=t=in:st=0:d=0.2,afade=t=out:st=${(clip1Dur-0.2).toFixed(3)}:d=0.2`;
+    const loopAudioFade2 = loopFadeSec2>0 ? `afade=t=in:st=0:d=${loopFadeSec2.toFixed(3)},afade=t=out:st=${(clip2Dur-loopFadeSec2).toFixed(3)}:d=${loopFadeSec2.toFixed(3)}` : `afade=t=in:st=0:d=0.2,afade=t=out:st=${(clip2Dur-0.2).toFixed(3)}:d=0.2`;
+    const loopVideoFade1 = loopFadeSec1>0 && loop1.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec1.toFixed(3)}:alpha=1,fade=t=out:st=${(clip1Dur-loopFadeSec1).toFixed(3)}:d=${loopFadeSec1.toFixed(3)}:alpha=1` : ``;
+    const loopVideoFade2 = loopFadeSec2>0 && loop2.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec2.toFixed(3)}:alpha=1,fade=t=out:st=${(clip2Dur-loopFadeSec2).toFixed(3)}:d=${loopFadeSec2.toFixed(3)}:alpha=1` : ``;
     // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
     const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
       hasBg
-        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix]`
-        : `[vocal]acopy[a_mix]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade1}[a_faded]`
+        : `[vocal]${loopAudioFade1}[a_faded]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
-      `[vocal]acopy[a_mix]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+      `[vocal]${loopAudioFade1}[a_faded]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     // ponytail: clip2 distinct hook/seo/cta for sync
     const filterComplex2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
       hasBg
-        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix]`
-        : `[vocal]acopy[a_mix]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+        ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade2}[a_faded]`
+        : `[vocal]${loopAudioFade2}[a_faded]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
-      `[vocal]acopy[a_mix]`,
-      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_mix][ultra]amix=inputs=2:duration=first[a_final]`
+      `[vocal]${loopAudioFade2}[a_faded]`,
+      `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
 
     const cmdClip1 = hasBg
@@ -915,17 +933,17 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       seamless_loop: {
         [clip1Filename]: {
           enabled: seamlessEnabled,
-          loop_score: null, // ponytail: requires transcript alignment; null until Groq Whisper real
-          bridge_phrase: '',
-          loop_transition: 'pending transcript',
-          crossfade_ms: 0
+          loop_score: loop1.loop_score,
+          bridge_phrase: loop1.bridge_phrase,
+          loop_transition: loop1.loop_transition,
+          crossfade_ms: loop1.crossfade_ms
         },
         [clip2Filename]: {
           enabled: seamlessEnabled,
-          loop_score: null,
-          bridge_phrase: '',
-          loop_transition: 'pending transcript',
-          crossfade_ms: 0
+          loop_score: loop2.loop_score,
+          bridge_phrase: loop2.bridge_phrase,
+          loop_transition: loop2.loop_transition,
+          crossfade_ms: loop2.crossfade_ms
         }
       },
       backsound: {
