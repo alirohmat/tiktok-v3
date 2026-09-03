@@ -106,6 +106,45 @@ function getCtaTarget(entities:any, pinned:string):'keranjang_kuning'|'link_bio'
   if(low.includes('link')||low.includes('bio')) return 'link_bio';
   return 'follow';
 }
+function formatAssTime(sec:number):string{
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60); const sc=(sec%60); const s=Math.floor(sc), cs=Math.floor((sc-s)*100);
+  return `${String(h).padStart(1,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;
+}
+function escapeAssText(t:string):string{ return t.replace(/\\/g,'\\\\').replace(/{/g,'\\{').replace(/}/g,'\\}').replace(/\n/g,'\\N'); }
+function buildAssForClip(segments:any[], cStart:number, cEnd:number):string{
+  const cDur=cEnd-cStart;
+  const header=`[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 1
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: CC,Arial,44,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,1,5,30,30,280,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+  let body='';
+  for(const seg of segments){
+    const st=Number((seg as any).start ?? (seg as any).start_time ?? 0);
+    const en=Number((seg as any).end ?? (seg as any).end_time ?? st+2);
+    const txt=String((seg as any).text ?? (seg as any).word ?? '').trim();
+    if(!txt) continue;
+    const rs=Math.max(0, st - cStart);
+    const re=Math.min(cDur, en - cStart);
+    if(re<=rs || re<=0 || rs>=cDur) continue;
+    // clamp to clip duration, ensure at least 0.4s
+    const dur=re-rs; if(dur<0.3) continue;
+    const wrapped=txt.length>32 ? txt.replace(/(.{28,32})\s/g,'$1\\N') : txt;
+    body+=`Dialogue: 0,${formatAssTime(rs)},${formatAssTime(re)},CC,,0,0,0,,${escapeAssText(wrapped)}\n`;
+  }
+  if(!body) body=`Dialogue: 0,${formatAssTime(0)},${formatAssTime(Math.min(3,cDur))},CC,,0,0,0,,${escapeAssText('')}\n`;
+  return header+body;
+}
+
 function extractEntitiesFromText(txt:string, cap=8){
   const lower=txt.toLowerCase();
   const people:string[]=[]; const peopleRe=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g; let m:RegExpExecArray|null; while((m=peopleRe.exec(txt))&&people.length<cap){ const v=m[1].trim(); if(v.length>=5&&v.length<=40&&!/^(Video|Channel|TikTok|YouTube|Save|Share)/i.test(v)) people.push(v); }
@@ -898,9 +937,26 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     for(let idx=0; idx<activeClips.length; idx++){
       const clip = activeClips[idx];
       const variant = visualForIdx(idx);
-      const hook = escWrap(clip?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
+      const hookFull = wrapHook(clip?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
+      const hookParts = hookFull.split('\n');
+      const hookL1 = esc(hookParts[0]||'');
+      const hookL2 = esc(hookParts[1]||'');
       const seo = esc(clip?.seo_keyword||slugify(baseCleanName)+'-viral');
       const cta = esc(clip?.cta_text|| (idx===0 ? 'Save & Share ->' : `Part ${idx+1} ->`));
+      // Whisper CC ASS per clip (center karaoke)
+      let assFilter='';
+      try{
+        const segs:any[] = Array.isArray(lastWhisperSegments)?lastWhisperSegments:[];
+        if(segs.length){
+          const assContent = buildAssForClip(segs, cStart, cEnd);
+          const assPath = path.join(cacheDir, `cc_${jobId}_${idx+1}.ass`);
+          try{ fs.mkdirSync(cacheDir,{recursive:true}); }catch{}
+          fs.writeFileSync(assPath, assContent, 'utf8');
+          // escape for filter: colon and single quote
+          const escAss = assPath.replace(/:/g,'\\:').replace(/'/g,"\\'");
+          assFilter = `,ass='${escAss}'`;
+        }
+      }catch(e:any){ console.warn('[CC]',String(e?.message||e).slice(0,80)); }
       const cStart = Math.max(0, Number(clip?.start_time)||0);
       const cEnd = Math.max(cStart+5, Number(clip?.end_time)||cStart+30);
       const cDur = Math.min(45, cEnd-cStart);
@@ -915,7 +971,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase ${3+idx}/5: Clip ${idx+1}/${activeClips.length} start=${cStart}s dur=${cDur}s hook=${(clip?.hook_text||'').slice(0,30)} variant=${variant.label} zoom=${variant.zoom}`);
       broadcastSSE();
       const filterComplex = [
-        `[0:v]${zoomPrefix}crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook}':fontcolor=white:fontsize=48:box=1:boxcolor=${variant.box}:boxborderw=10:x=(w-text_w)/2:y=90:line_spacing=10:enable='between(t\\,0\\,3)',drawtext=text='${seo}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade}[v_out]`,
+        `[0:v]${zoomPrefix}crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawbox=x=0:y=1150:w=iw:h=220:color=black@0.85:t=fill:enable='between(t\\,0\\,4)',drawtext=text='${hookL1}':fontcolor=white:fontsize=52:box=0:x=(w-text_w)/2:y=1180:enable='between(t\\,0\\,4)',drawtext=text='${hookL2}':fontcolor=yellow:fontsize=52:box=0:x=(w-text_w)/2:y=1250:enable='between(t\\,0\\,4)',drawtext=text='${seo}':fontcolor=cyan:fontsize=36:box=0:x=(w-text_w)/2:y=1050:enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=1500:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=1850${assFilter}${loopVideoFade}[v_out]`,
         cleanFillersEnabled ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]` : `[0:a]volume=1.2[vocal]`,
         hasBg ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade}[a_faded]` : `[vocal]${loopAudioFade}[a_faded]`,
         `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
