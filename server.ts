@@ -63,6 +63,30 @@ function normalizePinnedReply(raw:any, entities:any):string{
   if(prod) return `Yang mau coba ${prod} yang aku bahas, cek keranjang kuning no. 3 ya, mumpung lagi diskon! \uD83D\uDC47`;
   return `Buat yang mau dengar cerita lengkapnya, cek playlist di profil / part 2 besok ya!`;
 }
+let lastWhisperSegments:any[]|null=null;
+const FILLER_RE=/\b(?:eee+|hmm+|eh+|um+|uh+|anu|emm+|er+|anu)\b|apa namanya|ya kan/gi;
+function computeNarrativeMetrics(transcript:string|null, segments:any[]|null, durSec:number){
+  const txt=(transcript||'').trim();
+  const words=txt?txt.split(/\s+/).filter(Boolean).length:0;
+  const mins=durSec>0?durSec/60:0;
+  const wpm=mins>0&&words>0?Math.round(words/mins):null;
+  let pacing:'fast'|'normal'|'slow'='normal';
+  if(wpm!=null){ if(wpm>160) pacing='fast'; else if(wpm<130) pacing='slow'; else pacing='normal'; }
+  const lower=txt.toLowerCase();
+  const fillers=(lower.match(FILLER_RE)||[]).map(x=>x.trim().toLowerCase()).slice(0,20);
+  const filler_count=fillers.length;
+  let silence_sec=0;
+  if(Array.isArray(segments)&&segments.length>=2){
+    for(let i=0;i<segments.length-1;i++){
+      const end=Number(segments[i].end ?? segments[i].end_time ?? segments[i].end ?? 0);
+      const start=Number(segments[i+1].start ?? segments[i+1].start_time ?? 0);
+      const gap=start-end;
+      if(Number.isFinite(gap)&&gap>0.6) silence_sec+=gap;
+    }
+    silence_sec=Math.round(silence_sec*10)/10;
+  }
+  return {wpm,filler_count,fillers_detected:fillers,silence_sec,pacing,total_words:words};
+}
 function normalizeSeamlessLoop(raw:any): {loop_score:number|null, bridge_phrase:string, loop_transition:string, crossfade_ms:number}{
   if(!raw||typeof raw!=='object') return {loop_score:null, bridge_phrase:'', loop_transition:'cut', crossfade_ms:0};
   let n=Number(raw.loop_score); let ls:number|null=(Number.isFinite(n)?Math.max(0,Math.min(100,Math.round(n))):null);
@@ -142,11 +166,11 @@ async function transcribeWithGroq(inputPath:string):Promise<string|null>{
     const buf=fs.readFileSync(tmpWav); const fd=new FormData();
     fd.append('file', new Blob([buf],{type:'audio/wav'}), 'audio.wav');
     fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3-turbo');
-    fd.append('language','id'); fd.append('response_format','json');
+    fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
     const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k},body:fd as any});
     try{fs.unlinkSync(tmpWav);}catch{}
-    if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); return null;}
-    const j:any=await r.json(); return (j.text||'').trim().slice(0,4000)||null;
+    if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); lastWhisperSegments=null; return null;}
+    const j:any=await r.json(); if(Array.isArray((j as any).segments)) lastWhisperSegments=(j as any).segments; else lastWhisperSegments=null; return ((j as any).text||'').trim().slice(0,4000)||null;
   }catch(e:any){console.warn('[GroqWhisper]',e?.message); try{fs.unlinkSync(tmpWav);}catch{} return null;}
 }
 async function callMuseLLM(baseName:string,dur:number,transcript:string|null, contextPackage:any={}):Promise<any|null>{
@@ -741,10 +765,10 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     job.detail = 'Groq Whisper transcript → LLM';
     job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 1/5: Transcript Groq Whisper → LLM brain`);
     broadcastSSE();
-    let llmData:any=null; let transcript:string|null=null; let contextPackage:any={ source_meta:null, entities:null, external_context:[] };
+    let probeDurForNarrative:number=30; let llmData:any=null; let transcript:string|null=null; let contextPackage:any={ source_meta:null, entities:null, external_context:[] };
     try{
       const {stdout}=await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
-      const dur=parseFloat(stdout.trim())||30;
+      const dur=parseFloat(stdout.trim())||30; probeDurForNarrative=dur;
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper: transcribe ${dur.toFixed(1)}s...`);
       transcript=await transcribeWithGroq(inputPath);
       if(transcript) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper OK: ${(transcript.slice(0,60)).replace(/\n/g,' ')}...`);
@@ -755,6 +779,13 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       llmData=await callMuseLLM(baseCleanName, dur, transcript, contextPackage);
       if(llmData?.clips?.length){ llmData.clips=enrichAndSortClips(llmData.clips); const top=llmData.clips[0]; const b=getViralityBadge(top.virality_score); job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM OK: ${llmData.clips.length} clip(s) sorted desc hook=${(top?.hook_text||'').slice(0,40)} virality=${top.virality_score} badge=${b.badge} seo=${top?.seo_keyword||''}`); } else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM skip/fallback — pakai caption auto jujur`);
     }catch(e:any){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] LLM error: ${e?.message||e}`); }
+    // P1-5 Narrative Cleaning Metrics (timeline safe — no trim)
+    let narrativeMetrics:any=null;
+    try{
+      const segDur = lastWhisperSegments?.length ? Number(lastWhisperSegments[lastWhisperSegments.length-1]?.end ?? lastWhisperSegments[lastWhisperSegments.length-1]?.end_time ?? 0) : 0;
+      const d = segDur>5 ? segDur : probeDurForNarrative;
+      narrativeMetrics = computeNarrativeMetrics(transcript, lastWhisperSegments, d);
+    }catch(e:any){ console.warn('[Narrative]',e?.message); narrativeMetrics = computeNarrativeMetrics(transcript, null, probeDurForNarrative); }
     const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%').slice(0,70);
     const llmC1=llmData?.clips?.[0]||null, llmC2=llmData?.clips?.[1]||llmC1;
     const hook1=esc(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
@@ -776,9 +807,9 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     // Phase 2: Pembersihan Filler Words & Dead-Air
     job.phase = 'clean fillers & silence';
     job.progress = 0.35;
-    job.detail = cleanFillersEnabled ? 'Filter silenceremove audio' : 'Skip pembersihan hening';
+    job.detail = cleanFillersEnabled ? 'Audio afftdn+agate (timeline safe)' : 'Skip pembersihan hening';
     if (cleanFillersEnabled) {
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 2/5: Pembersihan Filler Words & Dead-Air >0.45s via silenceremove filter`);
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 2/5: Narrative clean afftdn+agate (denoise+gate, timeline unchanged)`);
     }
     broadcastSSE();
 
@@ -808,7 +839,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const filterComplex1 = [
       `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
-        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
       hasBg
         ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade1}[a_faded]`
@@ -818,7 +849,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const filterComplexNoBg = [
       `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
-        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
       `[vocal]${loopAudioFade1}[a_faded]`,
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
@@ -827,7 +858,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const filterComplex2 = [
       `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
-        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
       hasBg
         ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade2}[a_faded]`
@@ -837,7 +868,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const filterComplexNoBg2 = [
       `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
-        ? `[0:a]silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB,volume=1.2[vocal]`
+        ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
       `[vocal]${loopAudioFade2}[a_faded]`,
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
@@ -964,28 +995,10 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
           audio_hash_cleaned: false
         }
       },
-      narrative_cleaning: {
-        [clip1Filename]: {
-          enabled: cleanFillersEnabled,
-          filler_words_removed: 0, // ponytail: real count requires Groq Whisper transcript
-          fillers_detected: [],
-          silence_cut_sec: 0,
-          original_duration_sec: 0,
-          optimized_duration_sec: 30.0,
-          pacing_wpm: null,
-          speedup_pct: 0
-        },
-        [clip2Filename]: {
-          enabled: cleanFillersEnabled,
-          filler_words_removed: 0,
-          fillers_detected: [],
-          silence_cut_sec: 0,
-          original_duration_sec: 0,
-          optimized_duration_sec: 30.0,
-          pacing_wpm: null,
-          speedup_pct: 0
-        }
-      },
+      narrative_cleaning: (()=>{ const nm=narrativeMetrics||computeNarrativeMetrics(transcript,null,probeDurForNarrative); const gateApplied=cleanFillersEnabled?'afftdn+agate':'bypass'; const w=nm.wpm; const oDur=probeDurForNarrative; return {
+        [clip1Filename]: { enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0 },
+        [clip2Filename]: { enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0 }
+      }; })(),
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
       engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; const ents=(contextPackage as any)?.entities || {people:[],brands:[],products:[],places:[],numbers:[],topics:[],pain_points:[],claims:[]}; const normComments=normalizeComments((llmData as any)?.comments, ents); const pin=normalizePinnedReply((llmData as any)?.pinned_reply, ents); const cta=getCtaTarget(ents, pin); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:normComments, pinned_reply:pin, cta_target:cta, ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
       clips: Array.isArray((llmData as any)?.clips) ? (llmData as any).clips.map((c:any)=>({ start_time:Number(c.start_time)||0, end_time:Number(c.end_time)||0, hook_text:String(c.hook_text||'').slice(0,120), seo_keyword:String(c.seo_keyword||'').slice(0,60), caption:String(c.caption||'').slice(0,500), hashtags:Array.isArray(c.hashtags)?c.hashtags.slice(0,8):[], cta_text:String(c.cta_text||'').slice(0,80), virality_score:normalizeViralityScore(c.virality_score), virality_badge:getViralityBadge(normalizeViralityScore(c.virality_score)).badge, virality_label:getViralityBadge(normalizeViralityScore(c.virality_score)).label, virality_emoji:getViralityBadge(normalizeViralityScore(c.virality_score)).emoji, is_primary:!!c.is_primary })) : [],
