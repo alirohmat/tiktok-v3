@@ -786,12 +786,14 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       const d = segDur>5 ? segDur : probeDurForNarrative;
       narrativeMetrics = computeNarrativeMetrics(transcript, lastWhisperSegments, d);
     }catch(e:any){ console.warn('[Narrative]',e?.message); narrativeMetrics = computeNarrativeMetrics(transcript, null, probeDurForNarrative); }
-    const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%').slice(0,70);
+    const esc=(s:string)=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%');
+const wrapHook=(s:string,maxPerLine=28)=>{ const w=s.trim().slice(0,85); if(w.length<=maxPerLine) return w; let cut=w.lastIndexOf(' ',maxPerLine); if(cut<12) cut=maxPerLine; const l1=w.slice(0,cut).trim(), l2=w.slice(cut).trim().slice(0,34); return l2?`${l1}\n${l2}`:l1; };
+const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     const llmC1=llmData?.clips?.[0]||null, llmC2=llmData?.clips?.[1]||llmC1;
-    const hook1=esc(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
+    const hook1=escWrap(llmC1?.hook_text||`Auto hook ${baseCleanName.slice(0,30)}`);
     const seo1=esc(llmC1?.seo_keyword||slugify(baseCleanName)+'-viral');
     const cta1=esc(llmC1?.cta_text||'Save & Share ->');
-    const hook2=esc(llmC2?.hook_text||hook1);
+    const hook2=escWrap(llmC2?.hook_text||hook1);
     const seo2=esc(llmC2?.seo_keyword||seo1);
     const cta2=esc(llmC2?.cta_text||cta1);
     // ponytail: clip timing from LLM transcript (start_time/end_time) → FFmpeg ss/t must match caption topic
@@ -837,7 +839,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     const loopVideoFade2 = loopFadeSec2>0 && loop2.loop_transition!=='cut' ? `,fade=t=in:st=0:d=${loopFadeSec2.toFixed(3)}:alpha=1,fade=t=out:st=${(clip2Dur-loopFadeSec2).toFixed(3)}:d=${loopFadeSec2.toFixed(3)}:alpha=1` : ``;
     // ponytail: 2 filter variants (with/without bg) — fallback must not reference [1:a]
     const filterComplex1 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -847,7 +849,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook1}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo1}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta1}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade1}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -856,7 +858,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     ].join(';');
     // ponytail: clip2 distinct hook/seo/cta for sync
     const filterComplex2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
@@ -866,7 +868,7 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
       `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
     ].join(';');
     const filterComplexNoBg2 = [
-      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=80:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
+      `[0:v]crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawtext=text='${hook2}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=85:line_spacing=8:enable='between(t\\,0\\,3)',drawtext=text='${seo2}':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.5:boxborderw=6:x=(w-text_w)/2:y=(h*0.35):enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta2}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=h-160:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=h-28${loopVideoFade2}[v_out]`,
       cleanFillersEnabled
         ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]`
         : `[0:a]volume=1.2[vocal]`,
