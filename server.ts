@@ -3,13 +3,15 @@ import cors from 'cors';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { randomUUID } from 'crypto';
 import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
 
 const execAsync = promisify(exec);
 
-const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->"}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk. SEAMLESS LOOP WAJIB return object seamless_loop {loop_score integer 0-100, bridge_phrase string kalimat penutup yang grammar memancing hook_text, loop_transition enum cut|fade|dissolve, crossfade_ms integer 200-500}. Konsep Syntactic Loop: bridge_phrase di akhir video harus nyambung sintaksis dengan hook_text di awal sehingga saat TikTok auto-loop kalimat jadi satu. Mis Hook uang 1,2 miliar bisa hilang dari TikTok! + Bridge Dan itulah alasan kenapa -> loop Dan itulah alasan kenapa uang 1,2 miliar bisa hilang dari TikTok! Lakukan analisis transcript untuk buat bridge_phrase paling mulus. MULTI-CLIP INDEPENDENT WAJIB: Return 2-3 clip VIRAL dengan start_time BERBEDA minimal 120 detik, JANGAN berurutan. Contoh BURUK clip1 0-30s clip2 30-60s berurutan. Contoh BAIK clip1 5-35s topik A, clip2 125-155s topik B, clip3 260-290s topik C. Setiap clip hook_text BERBEDA dan virality_score sendiri. Jumlah clip: durasi <10 menit max 2, 10-60 menit max 3, >60 menit max 5.`;
+const SYSTEM_PROMPT = `You are viral clip detector TikTok Affiliate. Return ONLY valid JSON. Schema: {"clips":[{"start_time":0,"end_time":35,"hook_text":"5-12 words hook","virality_score":95,"seo_keyword":"cara-atasi-insomnia","caption":"keyword first 50 chars","hashtags":["#insomnia","#tidur"],"cta_text":"Save & Share ->","seamless_loop":{"loop_score":88,"bridge_phrase":"Dan itulah alasan kenapa","loop_transition":"fade","crossfade_ms":300}}],"niche_tag":"kesehatan","niche_profit_tier":"high","niche_score":85,"niche_advisory":"High profit niche — upload 19:00 WIB","niche_approved":true,"comments":[{"text":"Ah masa sih bang? Kok di gue gak ngaruh ya?","intent":"skeptic"}],"pinned_reply":"Yang mau coba serum Skintific cek keranjang kuning no.3 ya!","cta_target":"keranjang_kuning"} Rules: 30-60s clips, hyphen keyword, caption keyword first 50, 3-5 hashtags, CTA Save/Share. WAJIB return niche_tag (string non-empty), niche_profit_tier enum low|medium|high (map 8-15%->high, 4-8%->medium, else low), niche_score integer 0-100, niche_advisory string. JANGAN null. CONTEXT-AWARE HOOK: Gunakan SOURCE METADATA + NLP ENTITIES + EXTERNAL CONTEXT untuk memilih angle terkuat: (a) public figure jika ada people terkenal, (b) brand/product jika ada brand/produk, (c) pain point jika ada masalah audiens, (d) number/data jika ada angka kuat, (e) trend/news jika ada konteks publik. Hook TIDAK boleh generic — harus spesifik dari entity paling relevan dengan transcript dan niche. JANGAN membuat klaim palsu yang tidak ada di transcript/metadata/context. Jika external_context kosong, tetap pakai transcript+metadata. COMMENTS WAJIB 3-5 items array comments tiap {text,intent} intent enum skeptic|curious|relatable. Tulis dari sudut pandang AUDIENS (bukan kreator). Variasi: skeptic memicu debat (Ah masa sih bang?), curious memicu tanya (varian lama atau baru bang?), relatable memicu curhat (gue juga ngalamin!). DILARANG generic bot Mantap bang/Keren/Ijin sedot. DILARANG SARA/toxic/melangkui guideline. PINNED_REPLY WAJIB: jika entities.brands/products ada -> CTA keranjang_kuning sebut produk mis Yang mau coba {product} cek keranjang kuning no.3 mumpung diskon! Jika TIDAK ADA produk -> CTA follow/playlist mis Cek playlist di profil / part 2 besok ya! cta_target enum keranjang_kuning|link_bio|follow sesuaikan produk. SEAMLESS LOOP WAJIB return object seamless_loop {loop_score integer 0-100, bridge_phrase string kalimat penutup yang grammar memancing hook_text, loop_transition enum cut|fade|dissolve, crossfade_ms integer 200-500}. Konsep Syntactic Loop: bridge_phrase di akhir video harus nyambung sintaksis dengan hook_text di awal sehingga saat TikTok auto-loop kalimat jadi satu. Mis Hook uang 1,2 miliar bisa hilang dari TikTok! + Bridge Dan itulah alasan kenapa -> loop Dan itulah alasan kenapa uang 1,2 miliar bisa hilang dari TikTok! Lakukan analisis transcript untuk buat bridge_phrase paling mulus. MULTI-CLIP INDEPENDENT WAJIB: Return 2-3 clip VIRAL dengan start_time BERBEDA minimal 120 detik, JANGAN berurutan. Contoh BURUK clip1 0-30s clip2 30-60s berurutan. Contoh BAIK clip1 5-35s topik A, clip2 125-155s topik B, clip3 260-290s topik C. Setiap clip hook_text BERBEDA dan virality_score sendiri. Setiap clip WAJIB punya seamless_loop sendiri yang bridge_phrase-nya nyambung ke hook_text clip itu (fallback global dipakai bila tak ada). Jumlah clip: durasi <10 menit max 2, 10-60 menit max 3, >60 menit max 5.`;
 function slugify(s: string){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,32)||'viral-hook'; }
 function extractJson(t: string){ let x=t.trim(); if(x.startsWith('```')){const n=x.indexOf('\n'); if(n!==-1) x=x.slice(n+1); if(x.endsWith('```')) x=x.slice(0,-3); x=x.trim();} try{JSON.parse(x); return x;}catch{} const a=x.indexOf('{'),b=x.lastIndexOf('}'); if(a!==-1&&b>a){const c=x.slice(a,b+1); try{JSON.parse(c); return c;}catch{}} return x; }
 function enforceSeo(cs:any[]){ for(const c of cs){ if(!c.seo_keyword||!c.seo_keyword.includes('-')) c.seo_keyword=slugify(c.hook_text||c.caption||'viral')+'-viral'; const kw=c.seo_keyword.replace(/-/g,' ').toLowerCase().split(' ').filter(Boolean); const cap=(c.caption||'').toLowerCase(); if(c.caption&&!kw.some((w:string)=>cap.slice(0,60).includes(w))) c.caption=c.seo_keyword.replace(/-/g,' ')+' '+c.caption; if(!c.caption) c.caption=c.seo_keyword.replace(/-/g,' ')+' — tonton sampai akhir'; if(!c.hashtags||!c.hashtags.length) c.hashtags=['#'+c.seo_keyword.split('-')[0],'#tipssehat','#viral']; if(!c.cta_text) c.cta_text='Save video ini & Share ->'; if(!c.hook_text) c.hook_text='Tonton sampai habis'; } return cs; }
@@ -63,8 +65,8 @@ function normalizePinnedReply(raw:any, entities:any):string{
   if(prod) return `Yang mau coba ${prod} yang aku bahas, cek keranjang kuning no. 3 ya, mumpung lagi diskon! \uD83D\uDC47`;
   return `Buat yang mau dengar cerita lengkapnya, cek playlist di profil / part 2 besok ya!`;
 }
-let lastWhisperSegments:any[]|null=null;
-let transcriptPartialFlag=false;
+const whisperSegmentsByJob = new Map<string, any[]>();
+const transcriptPartialByJob = new Map<string, boolean>();
 let groqTranscribeLock:Promise<void>=Promise.resolve();
 async function acquireGroqLock():Promise<()=>void>{ let release:()=>void; const wait=new Promise<void>(r=>{release=r as any}); const prev=groqTranscribeLock; groqTranscribeLock=prev.then(()=>wait); await prev; return release!; }
 const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r as any,ms));
@@ -175,27 +177,46 @@ function extractContextEntities(sourceMeta:any, transcript:string|null){
   const txt=[sourceMeta?.title||'', sourceMeta?.description||'', (sourceMeta?.tags||[]).join(' '), transcript||''].join(' ').slice(0,6000);
   return extractEntitiesFromText(txt, 8);
 }
+const braveCache = new Map<string, {at:number, val:any}>();
 async function searchBraveContext(query:string, entity_type:string, timeoutMs=5000):Promise<{query:string,entity_type:string,title:string,snippet:string,url:string}|null>{
   const key=(process.env.BRAVE_SEARCH_API_KEY||process.env.BRAVE_API_KEY||'').trim();
   if(!key||key.includes('your_')) return null;
+  const ck=query.toLowerCase().trim(); const ch=braveCache.get(ck);
+  if(ch && Date.now()-ch.at < CACHE_TTL){ return {...ch.val, query, entity_type}; }
   const controller=new AbortController(); const t=setTimeout(()=>controller.abort(), timeoutMs);
   try{
     const r=await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=3&freshness=pm`,{headers:{'Accept':'application/json','X-Subscription-Token':key},signal:controller.signal});
     clearTimeout(t);
     if(!r.ok){ console.warn('[Brave]',r.status,(await r.text()).slice(0,120)); return null; }
     const j:any=await r.json(); const first=j.web?.results?.[0]||j.results?.[0]; if(!first) return null;
-    return { query, entity_type, title:(first.title||'').slice(0,120), snippet:(first.description||first.snippet||'').slice(0,280), url:first.url||'' };
+    const bv={ query, entity_type, title:(first.title||'').slice(0,120), snippet:(first.description||first.snippet||'').slice(0,280), url:first.url||'' };
+    braveCache.set(ck,{at:Date.now(),val:bv}); if(braveCache.size>200){ const k0=braveCache.keys().next().value; if(k0) braveCache.delete(k0); }
+    return bv;
   }catch(e:any){ clearTimeout(t); console.warn('[Brave]',e?.message?.slice(0,80)||e); return null; }
+}
+const probeCache = new Map<string, {at:number, dur:number}>();
+const ytdlpInfoCache = new Map<string, {at:number, val:any}>();
+const CACHE_TTL = 24*3600*1000;
+async function probeDurationCached(inputPath:string):Promise<number>{
+  const hit = probeCache.get(inputPath);
+  if(hit && Date.now()-hit.at < CACHE_TTL) return hit.dur;
+  const {stdout} = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`, { timeout: 30000 } as any);
+  const dur = parseFloat(stdout.trim())||30;
+  probeCache.set(inputPath, {at:Date.now(), dur});
+  if(probeCache.size>200){ const k0=probeCache.keys().next().value; if(k0) probeCache.delete(k0); }
+  return dur;
 }
 function lookupYtdlpUrlByFilename(filename:string):string|null{
   for(const job of (ytdlpJobs as any).values()){ if(job.filename===filename || job.filepath?.endsWith(filename)) return job.url||null; }
   return null;
 }
-async function extractYtdlpMetadata(url:string):Promise<any|null>{
+async function extractYtdlpMetadata(url:string, filenameHint?:string):Promise<any|null>{
   try{
+    const ym = ytdlpInfoCache.get(url);
+    if(ym && Date.now()-ym.at < CACHE_TTL) return ym.val;
     const { stdout }=await execAsync(`/usr/local/bin/yt-dlp --dump-json --no-playlist "${url.replace(/"/g,'\"')}"`, { timeout:30000 } as any);
     const info=JSON.parse(stdout);
-    return { title:(info.title||'').slice(0,200), description:(info.description||'').slice(0,800), channel:info.uploader||info.channel||info.uploader_id||'', channel_id:info.channel_id||info.uploader_id||'', upload_date:info.upload_date||'', duration:info.duration||0, view_count:info.view_count||0, like_count:info.like_count||0, categories:info.categories||[], tags:(info.tags||[]).slice(0,20), extractor:info.extractor||'', url };
+    const yval={ title:(info.title||'').slice(0,200), description:(info.description||'').slice(0,800), channel:info.uploader||info.channel||info.uploader_id||'', channel_id:info.channel_id||info.uploader_id||'', upload_date:info.upload_date||'', duration:info.duration||0, view_count:info.view_count||0, like_count:info.like_count||0, categories:info.categories||[], tags:(info.tags||[]).slice(0,20), extractor:info.extractor||'', url }; ytdlpInfoCache.set(url,{at:Date.now(),val:yval}); if(ytdlpInfoCache.size>200){ const k0=ytdlpInfoCache.keys().next().value; if(k0) ytdlpInfoCache.delete(k0); } return yval;
   }catch(e:any){ console.warn('[ytdlp-meta]',String(e?.message||e).slice(0,120)); return null; }
 }
 async function buildContextPackage(sourceName:string, transcript:string|null):Promise<{source_meta:any, entities:any, external_context:any[]}>{
@@ -235,17 +256,19 @@ async function buildContextPackage(sourceName:string, transcript:string|null):Pr
   return { source_meta, entities, external_context };
 }
 function buildPostingSchedule(tier:'low'|'medium'|'high'){ const isHigh=tier==='high', isMed=tier==='medium'; const slots=[ {slot:'Pagi Hari (06:30 - 08:30 WIB)',time_range:'06:30 - 08:30 WIB',category:'Morning Commute & Breakfast (WIB)',traffic:isHigh?'Sangat Tinggi' as const:'Tinggi' as const,description:isHigh?'Golden pagi niche high — prioritas upload pagi':'Cocok untuk edukasi ringkas pagi',is_golden:isHigh}, {slot:'Siang Hari (11:45 - 13:15 WIB)',time_range:'11:45 - 13:15 WIB',category:'Lunch Break & Relax',traffic:'Tinggi' as const,description:'Traffic siang stabil',is_golden:false}, {slot:'Sore Hari (16:30 - 18:00 WIB)',time_range:'16:30 - 18:00 WIB',category:'Teatime & Heading Home',traffic:'Sedang' as const,description:'Pemanasan algoritma sore',is_golden:false}, {slot:'Malam Hari (19:00 - 21:00 WIB)',time_range:'19:00 - 21:00 WIB',category:'Golden Prime Time WIB',traffic:'Sangat Tinggi' as const,description:isHigh?'Prime malam — slot kedua high tier':'Prime malam — slot utama low/medium',is_golden:true} ]; const best=isHigh?'06:30 - 08:30 WIB (Pagi Golden - niche high)': isMed?'19:00 - 21:00 WIB (Prime Time - niche medium)':'19:00 - 21:00 WIB (Prime Time - niche low, slot lebih akhir)'; const advice=isHigh?'Upload 06:30 WIB (utama) + 19:00 WIB (kedua) — high tier prioritas pagi':'Upload 19:00 WIB — niche '+tier; return {timezone:'Asia/Jakarta (WIB)',slots,best_slot_today:best,advice}; }
-async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<string|null>{
-  const release=await acquireGroqLock();
-  transcriptPartialFlag=false;
+async function transcribeWithGroq(inputPath:string, jobId:string, probeDur:number=0):Promise<string|null>{
+  transcriptPartialByJob.set(jobId, false);
   const isLong=probeDur>7200;
   if(isLong) console.warn(`[GroqWhisper] Video exceeds Groq free tier hourly limit (${probeDur.toFixed(0)}s > 7200s). Using smart 120s first-chunk sampling to stay within quota.`);
-  const tmpMp3=`/tmp/groq_${Date.now()}.mp3`;
+  const tmpDir=await fs.promises.mkdtemp(path.join(os.tmpdir(), `groq-${jobId}-`));
+  const tmpMp3=path.join(tmpDir, `audio-${randomUUID()}.mp3`);
   const tmpWav=tmpMp3;
+  const BACKOFF=[5000,15000,30000];
+  const cleanup=async()=>{ try{await fs.promises.rm(tmpDir,{recursive:true,force:true});}catch{} };
   try{
     const durFlag=isLong?'-t 120 ':'';
     await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 64k -c:a libmp3lame ${durFlag}"${tmpMp3}"`);
-    if(!fs.existsSync(tmpWav)||fs.statSync(tmpWav).size<1000) return null;
+    if(!fs.existsSync(tmpWav)||fs.statSync(tmpWav).size<1000){ await cleanup(); return null; }
     console.log(`[Whisper] tmp.mp3 ${(fs.statSync(tmpWav).size/1024/1024).toFixed(1)}MB ${fs.statSync(tmpWav).size} bytes durFlag=${durFlag||'FULL'} isLong=${isLong}`);
     // Guard Groq 25MB limit: 32k mono 90m=21MB OK, 120m=28MB OVER -> auto downsample 24k if needed
     if(fs.statSync(tmpWav).size>25*1024*1024 && !isLong){
@@ -254,7 +277,7 @@ async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<s
       if(fs.statSync(tmpWav).size>25*1024*1024){
         console.warn(`[GroqWhisper] still >25MB after 24k, fallback 120s partial`);
         await execAsync(`ffmpeg -y -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 32k -c:a libmp3lame -t 120 "${tmpMp3}"`);
-        transcriptPartialFlag=true;
+        transcriptPartialByJob.set(jobId, true);
       }
     }
     const buf=fs.readFileSync(tmpWav); const fd=new FormData();
@@ -262,44 +285,90 @@ async function transcribeWithGroq(inputPath:string, probeDur:number=0):Promise<s
     fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3');
     fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
     for(let attempt=0; attempt<3; attempt++){
+      // lock hanya untuk 1 fetch, dilepas SEBELUM backoff sleep
+      const release=await acquireGroqLock();
+      let r:any=null; let ferr:any=null;
       try{
         const gk=(process.env.GROQ_API_KEY||'').trim();
-        const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+gk},body:fd as any});
-        if(r.status===429){
-          const body=(await r.text()).slice(0,300);
-          console.warn(`[GroqWhisper] 429 rate limit hit attempt ${attempt+1}/3 - ${body}`);
-          if(attempt<2){ console.log('[GroqWhisper] Groq rate limit hit. Waiting 60s for quota reset...'); await sleep(60000); continue; }
-          console.warn('[GroqWhisper] 429 persists after 3 retries - fallback partial transcript flag');
-          transcriptPartialFlag=true; try{fs.unlinkSync(tmpWav);}catch{} lastWhisperSegments=null; return null;
-        }
-        try{fs.unlinkSync(tmpWav);}catch{}
-        if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); lastWhisperSegments=null; return null;}
-        const j:any=await r.json(); if(Array.isArray((j as any).segments)) lastWhisperSegments=(j as any).segments; else lastWhisperSegments=null; const _rawTxt=((j as any).text||'').trim(); console.log(`[Whisper] response text ${_rawTxt.length} chars segments=${(lastWhisperSegments||[]).length}`); if(_rawTxt.length<500 && probeDur>600) console.warn(`[Whisper] truncated warning: ${_rawTxt.length} chars for ${probeDur.toFixed(0)}s video`); const txt=_rawTxt.slice(0,12000)||null; if(probeDur>7200&&txt) transcriptPartialFlag=true; return txt;
-      }catch(e:any){
-        const msg=String(e?.message||e);
+        r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+gk},body:fd as any});
+      }catch(e:any){ ferr=e; }
+      release();
+      if(ferr){
+        const msg=String(ferr?.message||ferr);
         if(msg.includes('429')||msg.toLowerCase().includes('rate limit')){
           console.warn(`[GroqWhisper] 429 exception attempt ${attempt+1}/3 ${msg.slice(0,200)}`);
-          if(attempt<2){ await sleep(60000); continue; }
-          transcriptPartialFlag=true; try{fs.unlinkSync(tmpWav);}catch{} return null;
+          if(attempt<2){ await sleep(BACKOFF[attempt]); continue; }
+          transcriptPartialByJob.set(jobId, true); await cleanup(); return null;
         }
-        throw e;
+        throw ferr;
       }
+      if(r.status===429){
+        const body=(await r.text()).slice(0,300);
+        console.warn(`[GroqWhisper] 429 rate limit hit attempt ${attempt+1}/3 - ${body}`);
+        if(attempt<2){ console.log(`[GroqWhisper] backoff ${BACKOFF[attempt]/1000}s di luar lock...`); await sleep(BACKOFF[attempt]); continue; }
+        console.warn('[GroqWhisper] 429 persists after 3 retries - fallback partial transcript flag');
+        transcriptPartialByJob.set(jobId, true); whisperSegmentsByJob.delete(jobId); await cleanup(); return null;
+      }
+      await cleanup();
+      if(!r.ok){console.warn('[GroqWhisper]',r.status,(await r.text()).slice(0,200)); whisperSegmentsByJob.delete(jobId); return null;}
+      const j:any=await r.json(); if(Array.isArray((j as any).segments)) whisperSegmentsByJob.set(jobId,(j as any).segments); else whisperSegmentsByJob.delete(jobId); const _rawTxt=((j as any).text||'').trim(); const _segs=whisperSegmentsByJob.get(jobId)||[]; console.log(`[Whisper] response text ${_rawTxt.length} chars segments=${_segs.length}`); if(_rawTxt.length<500 && probeDur>600) console.warn(`[Whisper] truncated warning: ${_rawTxt.length} chars for ${probeDur.toFixed(0)}s video`); const txt=_rawTxt.slice(0,12000)||null; if(probeDur>7200&&txt) transcriptPartialByJob.set(jobId, true); return txt;
     }
-    try{fs.unlinkSync(tmpWav);}catch{} return null;
-  }catch(e:any){console.warn('[GroqWhisper]',e?.message); try{fs.unlinkSync(tmpWav);}catch{} return null;}
-  finally{ release(); }
+    await cleanup(); return null;
+  }catch(e:any){console.warn('[GroqWhisper]',e?.message); await cleanup(); return null;}
+}
+async function transcribeWindowGroq(inputPath:string, jobId:string, cStart:number, cEnd:number):Promise<any[]|null>{
+  const dur=Math.max(5, Math.min(120, cEnd-cStart));
+  const tmpDir=await fs.promises.mkdtemp(path.join(os.tmpdir(), `groqwin-${jobId}-`));
+  const tmpMp3=path.join(tmpDir, `win-${randomUUID()}.mp3`);
+  const cleanup=async()=>{ try{await fs.promises.rm(tmpDir,{recursive:true,force:true});}catch{} };
+  const BACKOFF=[5000,15000,30000];
+  try{
+    await execAsync(`ffmpeg -y -ss ${cStart} -t ${dur} -i "${inputPath}" -vn -ac 1 -ar 16000 -b:a 32k -c:a libmp3lame "${tmpMp3}"`, { timeout: 120000 } as any);
+    if(!fs.existsSync(tmpMp3)||fs.statSync(tmpMp3).size<1000){ await cleanup(); return null; }
+    const buf=fs.readFileSync(tmpMp3); const fd=new FormData();
+    fd.append('file', new Blob([buf],{type:'audio/mpeg'}), 'audio.mp3');
+    fd.append('model', process.env.GROQ_WHISPER_MODEL||'whisper-large-v3');
+    fd.append('language','id'); fd.append('response_format','verbose_json'); fd.append('timestamp_granularities[]','segment');
+    for(let attempt=0; attempt<3; attempt++){
+      const release=await acquireGroqLock();
+      let r:any=null; let ferr:any=null;
+      try{
+        const gk=(process.env.GROQ_API_KEY||'').trim();
+        r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+gk},body:fd as any});
+      }catch(e:any){ ferr=e; }
+      release();
+      if(ferr){
+        const msg=String(ferr?.message||ferr);
+        if(/429|rate limit/i.test(msg)){ if(attempt<2){ await sleep(BACKOFF[attempt]); continue; } await cleanup(); return null; }
+        throw ferr;
+      }
+      if(r.status===429){ try{await r.text();}catch{} if(attempt<2){ await sleep(BACKOFF[attempt]); continue; } await cleanup(); return null; }
+      await cleanup();
+      if(!r.ok){console.warn('[GroqWhisper-win]',r.status,(await r.text()).slice(0,120)); return null;}
+      const j:any=await r.json();
+      const wsegs=Array.isArray((j as any).segments)?(j as any).segments:[];
+      for(const s of wsegs){
+        const b0=Number((s as any).start ?? (s as any).start_time ?? 0);
+        const e0=Number((s as any).end ?? (s as any).end_time ?? b0+2);
+        if('start' in (s as any)) (s as any).start=b0+cStart; else (s as any).start_time=b0+cStart;
+        if('end' in (s as any)) (s as any).end=e0+cStart; else (s as any).end_time=e0+cStart;
+      }
+      return wsegs;
+    }
+    await cleanup(); return null;
+  }catch(e:any){console.warn('[GroqWhisper-win]',e?.message); await cleanup(); return null;}
 }
 async function callMuseLLM(baseName:string,dur:number,transcript:string|null, contextPackage:any={}):Promise<any|null>{
   const k=(process.env.MUSE_API_KEY||process.env.GROQ_API_KEY||'').trim(); const u=(process.env.MUSE_BASE_URL||'https://api.groq.com/openai/v1').trim(); const m=(process.env.MUSE_MODEL||'openai/gpt-oss-120b').trim();
   if(!k||k.includes('your_')){console.log('[LLM] skip placeholder'); return null;}
-  const tr=transcript?`TRANSCRIPT (wajib pakai untuk caption/hook/seo, JANGAN ngarang): """${transcript.slice(0,3000)}"""`:`Tanpa transcript (file testsrc), buat generic.`;
+  const tr=transcript?`TRANSCRIPT (wajib pakai untuk caption/hook/seo, JANGAN ngarang): """${(transcript.length>3000 ? transcript.slice(0,1500)+"\n[...]\n"+transcript.slice(Math.floor(transcript.length/2)-750, Math.floor(transcript.length/2)+750) : transcript)}"""`:`Tanpa transcript (file testsrc), buat generic.`;
   const sm=contextPackage?.source_meta; const ent=contextPackage?.entities; const ext=contextPackage?.external_context;
   const metaBlock=sm?`\n=== SOURCE METADATA ===\nTitle: ${(sm.title||'').slice(0,120)}\nChannel: ${(sm.channel||'').slice(0,80)}${sm.channel_id?' ('+sm.channel_id+')':''}\nViews: ${sm.view_count||0} | Likes: ${sm.like_count||0} | Duration: ${sm.duration||0}s\nCategories: ${(sm.categories||[]).join(', ').slice(0,80)}\nTags: ${(sm.tags||[]).slice(0,8).join(', ').slice(0,120)}\nDescription: ${(sm.description||'').slice(0,500)}\n=== END SOURCE METADATA ===`:'';
   const entBlock=ent?`\n=== NLP ENTITIES ===\nPeople: ${(ent.people||[]).join(', ')||'-'}\nBrands: ${(ent.brands||[]).join(', ')||'-'}\nProducts: ${(ent.products||[]).join(', ')||'-'}\nPlaces: ${(ent.places||[]).join(', ')||'-'}\nNumbers: ${(ent.numbers||[]).join(', ')||'-'}\nTopics: ${(ent.topics||[]).join(', ')||'-'}\nPain Points: ${(ent.pain_points||[]).join(', ')||'-'}\nClaims: ${(ent.claims||[]).join(' | ').slice(0,300)||'-'}\n=== END NLP ENTITIES ===`:'';
   const extBlock=(ext&&ext.length)?`\n=== EXTERNAL CONTEXT ===\n`+ext.map((c:any)=>`Query(${c.entity_type}): ${c.query}\nTitle: ${c.title}\nSnippet: ${c.snippet}\nURL: ${c.url}`).join('\n---\n')+`\n=== END EXTERNAL CONTEXT ===`:'';
   const maxClips = dur < 600 ? 2 : dur < 3600 ? 3 : 5;
   const prompt=`File:${baseName} Dur:${dur.toFixed(1)}s MAX_CLIPS=${maxClips} ${tr}${metaBlock}${entBlock}${extBlock} Buat ${maxClips} clip VIRAL INDEPENDENT: start_time & end_time HARUS momen retensi TERTINGGI dengan JARAK minimal 120 detik antar clip, JANGAN berurutan. 30-45s durasi per clip, hook 5-12 kata BERBEDA dari transcript+entities, seo_keyword hyphen BERBEDA, caption keyword first 50 chars, 3-5 hashtag. Gunakan SOURCE METADATA+NLP ENTITIES+EXTERNAL CONTEXT untuk angle terkuat. JANGAN klaim palsu. Return JSON dengan ${maxClips} clips.`;
-  try{ const r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.35,response_format:{type:'json_object'}})}); if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
+  try{ const ctl=new AbortController(); const tt=setTimeout(()=>ctl.abort(),60000); let r; try{ r=await fetch(u.replace(/\/+$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:prompt}],temperature:0.35,response_format:{type:'json_object'}}),signal:ctl.signal}); }finally{ clearTimeout(tt); } if(!r.ok){console.warn('[LLM]',r.status,(await r.text()).slice(0,200)); return null;} const j:any=await r.json(); const raw=j.choices?.[0]?.message?.content||''; const d=JSON.parse(extractJson(raw)); if(d.clips){d.clips=enforceSeo(d.clips); return d;} return null;}catch(e:any){console.warn('[LLM]',e?.message); return null;}
 }
 
 const app = express();
@@ -346,14 +415,19 @@ async function ensureAudioAssets() {
     const target = path.join(audioAssetsDir, filename);
     if (!fs.existsSync(target)) {
       try {
-        await execAsync(`ffmpeg -y -f lavfi -i "${filter}" "${target}"`);
+        const tmpTarget = `${target}.tmp-${process.pid}`;
+        await execAsync(`ffmpeg -y -f lavfi -i "${filter}" "${tmpTarget}"`);
+        fs.renameSync(tmpTarget, target);
       } catch (err) {
         console.error(`Failed to generate asset ${filename}:`, err);
+        try{ fs.unlinkSync(`${target}.tmp-${process.pid}`); }catch{}
       }
     }
   }
 }
-ensureAudioAssets();
+let audioAssetsReady: Promise<void> | null = null;
+function ensureAudioAssetsOnce(){ if(!audioAssetsReady) audioAssetsReady = ensureAudioAssets(); return audioAssetsReady; }
+ensureAudioAssetsOnce();
 
 // Source files management from storage
 interface SourceFile {
@@ -596,13 +670,21 @@ function getDiskInfo() {
       percent_used: total ? Math.round((used/total)*100) : 0
     };
   } catch {
-    return { total_space: '20 GB', used_space: '0 GB', free_space: '20 GB', percent_used: 0 };
+    return { total_space: null, used_space: null, free_space: null, percent_used: null };
   }
 }
 
 // SSE Clients Registry
 const sseClients = new Set<Response>();
 
+const diskCache:{at:number, val:any} = {at:0, val:null};
+function getDiskInfoCached(){ if(diskCache.val && Date.now()-diskCache.at < 5000) return diskCache.val; const v=getDiskInfo(); diskCache.at=Date.now(); diskCache.val=v; return v; }
+let lastBroadcast = 0, pendingBroadcast = false;
+function broadcastSSESoon(){
+  const now = Date.now();
+  if(now - lastBroadcast > 1000){ lastBroadcast = now; broadcastSSE(); }
+  else if(!pendingBroadcast){ pendingBroadcast = true; setTimeout(()=>{ pendingBroadcast=false; lastBroadcast=Date.now(); broadcastSSE(); }, 1000); }
+}
 function broadcastSSE() {
   sources = scanDownloads();
   const payload = JSON.stringify({
@@ -611,7 +693,7 @@ function broadcastSSE() {
     clip_jobs: Array.from(clipJobs.values()),
     ytdlp_jobs: Array.from(ytdlpJobs.values()),
     renders: Array.from(renders.values()),
-    disk: getDiskInfo()
+    disk: getDiskInfoCached()
   });
 
   sseClients.forEach(client => {
@@ -633,7 +715,7 @@ app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
     gemini_api_key_configured: Boolean(process.env.GEMINI_API_KEY),
     watermark_handle: '@brogalanblora',
     storage: getStorageStats(),
-    disk: getDiskInfo()
+    disk: getDiskInfoCached()
   });
 });
 
@@ -683,7 +765,7 @@ app.get(['/events', '/clip/events'], (req: Request, res: Response) => {
     clip_jobs: Array.from(clipJobs.values()),
     ytdlp_jobs: Array.from(ytdlpJobs.values()),
     renders: Array.from(renders.values()),
-    disk: getDiskInfo()
+    disk: getDiskInfoCached()
   });
   res.write(`data: ${initialPayload}\n\n`);
 
@@ -718,25 +800,8 @@ app.post('/api/ytdlp/info', async (req: Request, res: Response) => {
         ]
       }
     });
-  } catch {
-    // Fallback info if remote access is throttled
-    const isTiktok = url.includes('tiktok');
-    res.json({
-      ok: true,
-      data: {
-        title: isTiktok ? 'TikTok Viral Video Stream' : 'Video Sumber Online',
-        uploader: '@creator',
-        duration: 90,
-        view_count: null,
-        like_count: null, // ponytail: real counts require yt-dlp success; null = unavailable
-        extractor: isTiktok ? 'tiktok' : 'youtube',
-        description: 'Video terdeteksi siap diproses untuk pipeline kliping.',
-        formats: [
-          { format_id: 'best', ext: 'mp4', resolution: '1080x1920', filesize: null },
-          { format_id: 'audio_only', ext: 'mp3', resolution: 'audio', filesize: null }
-        ]
-      }
-    });
+  } catch(e:any){
+    return res.status(502).json({ ok:false, detail:'yt-dlp gagal ambil info: '+String(e?.message||e).slice(0,120) });
   }
 });
 
@@ -747,7 +812,7 @@ app.post('/api/ytdlp/download', (req: Request, res: Response) => {
     return res.status(400).json({ detail: 'URL tidak valid' });
   }
 
-  const jobId = Math.random().toString(16).substring(2, 14);
+  const jobId = randomUUID().replace(/-/g,'').slice(0,14);
   const cleanFilename = `video_${Date.now()}.${format === 'mp3' ? 'mp3' : 'mp4'}`;
   const targetPath = path.join(downloadsDir, cleanFilename);
 
@@ -806,7 +871,7 @@ app.post('/api/ytdlp/download', (req: Request, res: Response) => {
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Download biner sukses: ${cleanFilename} (${(stat.size/1024/1024).toFixed(1)} MB)`);
     } else {
       // Honest error: yt-dlp gagal, jangan buat video palsu testsrc/sine
-      job.status = 'error';
+      job.status = 'FAILURE';
       job.error = `Download gagal (yt-dlp exit ${'${'}code ?? 'unknown'}, file tidak tersedia). Coba URL lain atau periksa batasan YouTube di VPS.`;
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] ERROR: Download gagal (code=${'${'}code}), file sumber tidak dibuat — laporan jujur, tidak ada fallback palsu`);
     }
@@ -851,8 +916,8 @@ const VISUAL_VARIANTS = [
   { zoom:'100%', box:'black@0.6', label:'standard' },
   { zoom:'110%', box:'red@0.7', label:'zoom-red' },
   { zoom:'105%', box:'blue@0.6', label:'zoom-blue' },
-  { zoom:'110%', box:'cyan@0.6', label:'pitch-cyan' },
-  { zoom:'100%', box:'black@0.6', label:'pitch-extra' },
+  { zoom:'110%', box:'cyan@0.6', label:'zoom-cyan' },
+  { zoom:'100%', box:'black@0.6', label:'standard-2' },
 ];
 function visualForIdx(i:number){ return VISUAL_VARIANTS[i % VISUAL_VARIANTS.length]; }
 
@@ -877,8 +942,8 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
   const baseCleanName = sourceName.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
   try {
-    // 1. Ensure audio assets exist
-    await ensureAudioAssets();
+    // 1. Ensure audio assets exist (lazy, sekali, hanya jika butuh bg)
+    if (themeKey !== 'none') await ensureAudioAssetsOnce();
     const bgAudioPath = path.join(audioAssetsDir, selectedTheme.file);
 
     // Phase 1: Analisis input + transcript-sync (Groq Whisper → Muse caption)
@@ -890,10 +955,9 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     broadcastSSE();
     let probeDurForNarrative:number=30; let llmData:any=null; let transcript:string|null=null; let contextPackage:any={ source_meta:null, entities:null, external_context:[] };
     try{
-      const {stdout}=await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
-      const dur=parseFloat(stdout.trim())||30; probeDurForNarrative=dur;
+      const dur=await probeDurationCached(inputPath); probeDurForNarrative=dur;
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper: transcribe ${dur.toFixed(1)}s...`);
-      transcript=await transcribeWithGroq(inputPath, dur);
+      transcript=await transcribeWithGroq(inputPath, jobId, dur);
       if(transcript) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper OK: ${(transcript.slice(0,60)).replace(/\n/g,' ')}...`);
       else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper kosong/skip — LLM tanpa transcript`);
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Context: build source_meta+entities+Brave...`);
@@ -905,13 +969,30 @@ async function executeRealFFmpegPipeline(jobId: string, inputPath: string, sourc
     // P1-5 Narrative Cleaning Metrics (timeline safe — no trim)
     let narrativeMetrics:any=null;
     try{
-      const segDur = lastWhisperSegments?.length ? Number(lastWhisperSegments[lastWhisperSegments.length-1]?.end ?? lastWhisperSegments[lastWhisperSegments.length-1]?.end_time ?? 0) : 0;
+      const segsByJob = whisperSegmentsByJob.get(jobId) ?? null;
+      const segDur = segsByJob?.length ? Number(segsByJob[segsByJob.length-1]?.end ?? segsByJob[segsByJob.length-1]?.end_time ?? 0) : 0;
       const d = segDur>5 ? segDur : probeDurForNarrative;
-      narrativeMetrics = computeNarrativeMetrics(transcript, lastWhisperSegments, d);
+      narrativeMetrics = computeNarrativeMetrics(transcript, segsByJob, d);
     }catch(e:any){ console.warn('[Narrative]',e?.message); narrativeMetrics = computeNarrativeMetrics(transcript, null, probeDurForNarrative); }
     // N-clip independent: cap by duration AFTER probe known
     const maxClipsCap = probeDurForNarrative < 600 ? 2 : probeDurForNarrative < 3600 ? 3 : 5;
     let activeClips:any[] = (llmData?.clips||[]).slice(0, maxClipsCap);
+    // Validate + clamp ke durasi asli, enforce gap 120s (bukan cuma prompt)
+    {
+      const sorted=[...activeClips].sort((a,b)=>(Number(a?.start_time)||0)-(Number(b?.start_time)||0));
+      const valid:any[]=[]; let lastEnd=-1e9;
+      for(const c of sorted){
+        let s=Number(c?.start_time), e=Number(c?.end_time);
+        if(!isFinite(s)||!isFinite(e)){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip drop: start/end bukan angka`); continue; }
+        s=Math.min(Math.max(0,s),Math.max(0,probeDurForNarrative-5)); e=Math.min(Math.max(s+5,e),probeDurForNarrative);
+        if(e-s<15){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip drop: dur ${(e-s).toFixed(0)}s <15s`); continue; }
+        if(e-s>45) e=s+45; // cap jujur, bukan potong diam-diam di render
+        if(s-lastEnd<120&&valid.length){ job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip drop: gap ${(s-lastEnd).toFixed(0)}s <120s`); continue; }
+        c.start_time=Math.round(s); c.end_time=Math.round(e); valid.push(c); lastEnd=e;
+      }
+      if(valid.length!==activeClips.length) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Validasi clip: ${activeClips.length}→${valid.length}`);
+      activeClips=valid;
+    }
     if(!activeClips.length){
       const fbDur = Math.min(30, Math.max(15, probeDurForNarrative/3));
       activeClips = [{start_time:0, end_time:fbDur, hook_text:`Auto hook ${baseCleanName.slice(0,30)}`, seo_keyword:slugify(baseCleanName)+'-viral', caption:`Auto clip: ${baseCleanName}`, hashtags:['#fyp','#viral'], cta_text:'Save & Share ->', virality_score:50, virality_badge:'experimental', virality_label:'Eksperimental', virality_emoji:'\uD83E\uDDEA', is_primary:true}];
@@ -934,7 +1015,6 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
     // Phase 3-4: N-clip dynamic render loop (ponytail complete)
     const hasBg = themeKey !== 'none' && fs.existsSync(bgAudioPath);
     const seamlessRaw = (llmData as any)?.seamless_loop || null;
-    const loopNorm = normalizeSeamlessLoop(seamlessRaw);
     const generatedFiles:string[] = [];
     const clipFileInfos:{filename:string; clip:any; variant:any}[] = [];
     for(let idx=0; idx<activeClips.length; idx++){
@@ -949,10 +1029,20 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       const cStart = Math.max(0, Number(clip?.start_time)||0);
       const cEnd = Math.max(cStart+5, Number(clip?.end_time)||cStart+30);
       const cDur = Math.min(45, cEnd-cStart);
+      { const rawD = cEnd-cStart; if (rawD < 15 || rawD > 45) job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Clip ${idx+1} WARN durasi LLM ${rawD.toFixed(0)}s di luar 15-45, render ${cDur.toFixed(0)}s — caption/bridge mungkin mismatch`); }
       // Whisper CC ASS per clip (center karaoke) — MUST be after cStart/cEnd defined
       let assFilter='';
       try{
-        const segs:any[] = Array.isArray(lastWhisperSegments)?lastWhisperSegments:[];
+        let segs:any[] = whisperSegmentsByJob.get(jobId) ?? [];
+        {
+          const coverN = segs.filter((s:any)=>{ const st=Number((s as any).start ?? (s as any).start_time ?? 0), en=Number((s as any).end ?? (s as any).end_time ?? st); return en>cStart && st<cEnd; }).length;
+          if(!coverN){
+            job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper window ${cStart}-${cEnd}s tak tercover — transcribe window...`);
+            const wsegs = await transcribeWindowGroq(inputPath, jobId, cStart, cEnd);
+            if(wsegs?.length){ const cur=whisperSegmentsByJob.get(jobId) ?? []; cur.push(...wsegs); cur.sort((a:any,b:any)=>(Number((a as any).start ?? (a as any).start_time ?? 0))-(Number((b as any).start ?? (b as any).start_time ?? 0))); whisperSegmentsByJob.set(jobId, cur); segs=cur; job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper window OK: ${wsegs.length} segmen`); }
+            else job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Whisper window gagal — ASS mungkin kosong`);
+          }
+        }
         if(segs.length){
           const assContent = buildAssForClip(segs, cStart, cEnd);
           const assPath = path.join(cacheDir, `cc_${jobId}_${idx+1}.ass`);
@@ -966,6 +1056,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
           console.warn(`[CC] No segments for clip ${idx+1}, skipping ASS`);
         }
       }catch(e:any){ console.warn('[CC]',String(e?.message||e).slice(0,80)); }
+      const loopNorm = normalizeSeamlessLoop((clip as any)?.seamless_loop ?? seamlessRaw);
       const filename = `clip_${idx+1}_${baseCleanName}_${slugify(clip?.seo_keyword||'viral')}.mp4`;
       const outPath = path.join(rendersDir, filename);
       const loopFadeSec = loopNorm.crossfade_ms>0 ? Math.min(loopNorm.crossfade_ms/1000, Math.max(0, cDur-0.5)) : 0;
@@ -974,17 +1065,17 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       const zoomPrefix = variant.zoom==='110%' ? 'scale=iw*1.10:ih*1.10,' : variant.zoom==='105%' ? 'scale=iw*1.05:ih*1.05,' : '';
       job.phase = `render clip ${idx+1}`; job.progress = 0.55 + (idx/activeClips.length)*0.35;
       job.detail = `FFmpeg 9:16 ${variant.label} Loop ${idx+1} start=${cStart}s`;
-      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase ${3+idx}/5: Clip ${idx+1}/${activeClips.length} start=${cStart}s dur=${cDur}s hook=${(clip?.hook_text||'').slice(0,30)} variant=${variant.label} zoom=${variant.zoom}`);
-      broadcastSSE();
+      job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] Phase 3.${idx+1}/${activeClips.length} render: Clip ${idx+1}/${activeClips.length} start=${cStart}s dur=${cDur}s hook=${(clip?.hook_text||'').slice(0,30)} variant=${variant.label} zoom=${variant.zoom}`);
+      broadcastSSESoon();
       const filterComplex = [
-        `[0:v]${zoomPrefix}crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawbox=x=0:y=1150:w=iw:h=220:color=black@0.85:t=fill:enable='between(t\\,0\\,4)',drawtext=text='${hookL1}':fontcolor=white:fontsize=52:box=0:x=(w-text_w)/2:y=1180:enable='between(t\\,0\\,4)',drawtext=text='${hookL2}':fontcolor=yellow:fontsize=52:box=0:x=(w-text_w)/2:y=1250:enable='between(t\\,0\\,4)',drawtext=text='${seo}':fontcolor=cyan:fontsize=36:box=0:x=(w-text_w)/2:y=1050:enable='between(t\\,0.2\\,2.7)',drawtext=text='${cta}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=1500:enable='gte(t\\,10)',drawtext=text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=1850${assFilter}${loopVideoFade}[v_out]`,
+        `[0:v]${zoomPrefix}crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)/2':y='(ih-oh)/2',scale=1080:1920:flags=lanczos,setsar=1,drawbox=x=0:y=1150:w=iw:h=220:color=black@0.85:t=fill:enable='between(t\\,0\\,4)',drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${hookL1}':fontcolor=white:fontsize=52:box=0:x=(w-text_w)/2:y=1180:enable='between(t\\,0\\,4)',drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${hookL2}':fontcolor=yellow:fontsize=52:box=0:x=(w-text_w)/2:y=1250:enable='between(t\\,0\\,4)',drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${seo}':fontcolor=cyan:fontsize=36:box=0:x=(w-text_w)/2:y=1050:enable='between(t\\,0.2\\,2.7)',drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${cta}':fontcolor=white:fontsize=36:box=1:boxcolor=red@0.7:boxborderw=6:x=(w-text_w)/2:y=1500:enable='gte(t\\,10)',drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='@brogalanblora':fontcolor=white@0.7:fontsize=22:x=(w-text_w)/2:y=1850${assFilter}${loopVideoFade}[v_out]`,
         cleanFillersEnabled ? `[0:a]afftdn=nf=-25,agate=threshold=-35dB:ratio=4:attack=10:release=50,volume=1.2[vocal]` : `[0:a]volume=1.2[vocal]`,
         hasBg ? `[1:a]aloop=loop=-1:size=2e+09,volume=0.25[bg];[vocal][bg]amix=inputs=2:duration=first:dropout_transition=2[a_mix];[a_mix]${loopAudioFade}[a_faded]` : `[vocal]${loopAudioFade}[a_faded]`,
-        `aevalsrc=sin(19000*2*PI*t)*0.001:s=44100[ultra];[a_faded][ultra]amix=inputs=2:duration=first[a_final]`
+        `[a_faded]anull[a_final]`
       ].join(';');
       try{
         const cmd = hasBg ? `ffmpeg -y -ss ${cStart} -t ${cDur} -i "${inputPath}" -i "${bgAudioPath}" -filter_complex "${filterComplex}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outPath}"` : `ffmpeg -y -ss ${cStart} -t ${cDur} -i "${inputPath}" -filter_complex "${filterComplex}" -map "[v_out]" -map "[a_final]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k "${outPath}"`;
-        await execAsync(cmd);
+        await execAsync(cmd, { timeout: 600000, maxBuffer: 10*1024*1024 } as any);
         const sz = fs.existsSync(outPath) ? fs.statSync(outPath).size : 0;
         if(sz>10000){ generatedFiles.push(filename); renders.set(`${jobId}-${idx+1}`, {job_id:jobId, filename, size:sz, size_human:`${(sz/1024/1024).toFixed(1)} MB`, created_at:Date.now()}); clipFileInfos.push({filename, clip, variant}); }
         else throw new Error('empty '+sz);
@@ -1009,7 +1100,7 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       captions: captionsObj,
       detailed_captions: detailedCaptionsObj,
       seamless_loop: (()=>{ const o:any={}; for(const info of clipFileInfos) o[info.filename]={enabled:seamlessEnabled, loop_score:loopNorm.loop_score, bridge_phrase:loopNorm.bridge_phrase, loop_transition:loopNorm.loop_transition, crossfade_ms:loopNorm.crossfade_ms}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={enabled:seamlessEnabled, loop_score:loopNorm.loop_score, bridge_phrase:loopNorm.bridge_phrase, loop_transition:loopNorm.loop_transition, crossfade_ms:loopNorm.crossfade_ms}; return o; })(),
-      backsound: (()=>{ const o:any={}; for(const info of clipFileInfos) o[info.filename]={theme:selectedTheme.category, track_title:`${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm:selectedTheme.bpm, ducking_db:selectedTheme.ducking, license:'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned:false}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={theme:selectedTheme.category, track_title:`${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm:selectedTheme.bpm, ducking_db:selectedTheme.ducking, license:'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned:false}; return o; })(),
+      backsound: (()=>{ const o:any={}; for(const info of clipFileInfos) o[info.filename]={theme:(hasBg?selectedTheme.category:'silent (asset hilang)'), track_title:`${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm:selectedTheme.bpm, ducking_db:selectedTheme.ducking, license:'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned:false}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={theme:selectedTheme.category, track_title:`${selectedTheme.title} (${selectedTheme.bpm} BPM)`, bpm:selectedTheme.bpm, ducking_db:selectedTheme.ducking, license:'Generated locally (check TikTok Commercial Music Library before monetize)', audio_hash_cleaned:false}; return o; })(),
       narrative_cleaning: (()=>{ const nm=narrativeMetrics||computeNarrativeMetrics(transcript,null,probeDurForNarrative); const gateApplied=cleanFillersEnabled?'afftdn+agate':'bypass'; const w=nm.wpm; const oDur=probeDurForNarrative; const o:any={}; for(const info of clipFileInfos) o[info.filename]={enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: info.variant.label}; if(!Object.keys(o).length && generatedFiles[0]) o[generatedFiles[0]]={enabled:cleanFillersEnabled, wpm:w, filler_count:nm.filler_count, fillers_detected:nm.fillers_detected, silence_sec:nm.silence_sec, pacing:nm.pacing, total_words:nm.total_words, original_duration_sec:Math.round(oDur*10)/10, optimized_duration_sec:Math.round(oDur*10)/10, audio_filter_applied:gateApplied, filler_words_removed:nm.filler_count, silence_cut_sec:nm.silence_sec, pacing_wpm:w, speedup_pct:0, visual_variant: visualForIdx(0).label}; return o; })(),
       posting_schedule: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); return buildPostingSchedule(n.tier); })(),
       engagement: (()=>{ const n=normalizeNiche({tag:(llmData as any)?.niche_tag, tier:(llmData as any)?.niche_profit_tier, score:(llmData as any)?.niche_score, advisory:(llmData as any)?.niche_advisory}); const topVs=(llmData as any)?.clips?.[0]?.virality_score!=null? normalizeViralityScore((llmData as any).clips[0].virality_score): undefined; const topB=topVs!=null? getViralityBadge(topVs).badge: undefined; const ents=(contextPackage as any)?.entities || {people:[],brands:[],products:[],places:[],numbers:[],topics:[],pain_points:[],claims:[]}; const normComments=normalizeComments((llmData as any)?.comments, ents); const pin=normalizePinnedReply((llmData as any)?.pinned_reply, ents); const cta=getCtaTarget(ents, pin); return {niche_tag:n.tag, niche_profit_tier:n.tier, niche_score:n.score, niche_advisory:n.advisory, comments:normComments, pinned_reply:pin, cta_target:cta, ...(topVs!=null?{top_virality_score:topVs, top_virality_badge:topB}:{})}; })(),
@@ -1017,8 +1108,8 @@ const escWrap=(s:string)=>esc(wrapHook(s)).replace(/\n/g,'\\n');
       source_meta: contextPackage?.source_meta || { title:sourceName.replace(/[_-]/g,' ').slice(0,200), description:'', channel:'', channel_id:'', upload_date:'', duration:0, view_count:0, like_count:0, categories:[], tags:[], extractor:'local', url:'' },
       entities: contextPackage?.entities || { people:[], brands:[], products:[], places:[], numbers:[], topics:[], pain_points:[], claims:[] },
       external_context: contextPackage?.external_context || [],
-      transcript_partial: transcriptPartialFlag,
-      groq_rate_limited: transcriptPartialFlag
+      transcript_partial: transcriptPartialByJob.get(jobId) ?? false,
+      groq_rate_limited: transcriptPartialByJob.get(jobId) ?? false
     });
 
     broadcastSSE();
@@ -1068,11 +1159,11 @@ function startClipPipeline(sourcePathOrName: string, opts: ClipOptions = {}): st
   // Honest: jika file sumber tidak ada -> error, jangan buat video palsu testsrc
   (async () => {
     if (!fs.existsSync(inputPath)) {
-      job.status = 'error';
-      job.phase = 'error';
+      job.status = 'FAILURE';
+      job.phase = 'failed';
       job.error = `File sumber tidak ditemukan: ${path.basename(sourcePathOrName)}. Upload/link download gagal, tidak ada video asli untuk di-clip.`;
       job.logs.push(`[${new Date().toLocaleTimeString('id-ID')}] ERROR: File sumber tidak ditemukan — pipeline dibatalkan, tunggu download sukses`);
-      broadcastSSE();
+      broadcastSSESoon();
       return;
     }
     await executeRealFFmpegPipeline(jobId, inputPath, path.basename(inputPath), opts);
@@ -1091,18 +1182,13 @@ app.post('/clip/from-download', (req: Request, res: Response) => {
   res.json({ ok: true, job_id: jobId, status: 'PENDING' });
 });
 
-app.post('/clip/from-url', (req: Request, res: Response) => {
-  const { url, options } = req.body || {};
-  if (!url) {
-    return res.status(400).json({ detail: 'URL tidak boleh kosong' });
-  }
-  const cleanName = `url_source_${Date.now()}.mp4`;
-  const jobId = startClipPipeline(cleanName, options);
-  res.json({ ok: true, job_id: jobId, status: 'PENDING' });
+app.post('/clip/from-url', (_req: Request, res: Response) => {
+  return res.status(410).json({ detail: 'Gone: pakai POST /api/ytdlp/download lalu POST /clip/from-download', ok:false });
 });
 
 app.post('/clip', upload.single('file'), (req: Request, res: Response) => {
-  const filePath = req.file?.path || path.join(uploadsDir, 'upload-video.mp4');
+  if (!req.file?.path) return res.status(400).json({ detail: 'File kosong — upload mp4/webm/mov/mp3 dulu', ok:false });
+  const filePath = req.file.path;
   let options: ClipOptions = {};
   if (req.body?.options) {
     try {
@@ -1232,6 +1318,25 @@ app.delete('/api/ytdlp/files/:filename', (req: Request, res: Response) => {
   res.json({ ok: true, message: `File ${filename} dihapus` });
 });
 
+// Sweep orphan: cc_*.ass + /tmp/groq-* >24h, tiap start + 24h
+function sweepOrphans(){
+  const cutoff = Date.now() - 24*3600*1000;
+  try{
+    for(const f of fs.readdirSync(cacheDir)){
+      if(!f.startsWith('cc_')) continue;
+      const p = path.join(cacheDir, f);
+      try{ if(fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); }catch{}
+    }
+  }catch(e:any){ console.warn('[Sweep]', String(e?.message||e).slice(0,80)); }
+  try{
+    for(const f of fs.readdirSync(os.tmpdir())){
+      if(!f.startsWith('groq-') && !f.startsWith('groqwin-')) continue;
+      const p = path.join(os.tmpdir(), f);
+      try{ if(fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, {recursive:true, force:true}); }catch{}
+    }
+  }catch(e:any){ console.warn('[Sweep]', String(e?.message||e).slice(0,80)); }
+}
+
 // Vite Middleware for Development / Static for Production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -1251,6 +1356,7 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
+  sweepOrphans(); setInterval(sweepOrphans, 24*3600*1000);
 }
 
 startServer();
